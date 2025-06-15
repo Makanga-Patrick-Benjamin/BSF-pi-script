@@ -1,0 +1,16 @@
+opencv_python==4.11.0.86
+pytesseract==0.3.13
+Adafruit_Blinka==8.53.0
+adafruit_circuitpython_ads1x15==2.4.2
+gpiozero==2.0.1
+ncnn==1.0.20241226
+numpy==1.24.2
+opencv_python==4.11.0.86
+paho_mqtt==1.6.1
+picamera2==0.3.25
+Requests==2.32.3
+smbus2==0.4.2
+tabulate==0.9.0
+torch==2.6.0
+ultralytics==8.3.74
+
