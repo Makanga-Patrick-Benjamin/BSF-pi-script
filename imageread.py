@@ -7,14 +7,14 @@ from datetime import datetime
 import numpy as np
 
 # --- Configuration ---
-# Database Settings (switch this to your path)
-DATABASE_PATH = "/home/pato/Documents/sdf/text_ocr.db"
+# Database Settings (switch this to your path)/home/pato/Documents/sdf/
+DATABASE_PATH = "/home/pato/Documents/sdf/BSF-pi-script/text_ocr.db"
 # Directory to store processed images (optional, you can just process in place)
 # IMAGE_STORAGE_DIR = "/home/pato/Documents/sdf/ocr_processed_images"
 
 # New: Directory containing images to be processed
-INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/input_images" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
-PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/ocr_processed_images" # Directory to move processed images
+INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/BSF-pi-script/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
+PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/BSF-pi-script/ocr_processed_images" # Directory to move processed images
 
 # EasyOCR Settings
 # For first run, EasyOCR will download models. This requires internet.
@@ -34,7 +34,7 @@ PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process th
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
     # Pass the allowlist to the reader initialization through recognizer_config
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, recognizer_config={'allowlist': EASYOCR_ALLOWLIST})
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
@@ -108,7 +108,7 @@ def extract_text_with_easyocr(image_path):
 
     try:
         # Perform OCR using EasyOCR. The allowlist is already configured in the reader.
-        results = reader.readtext(processed_image)
+        results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST)
 
         for (bbox, text, confidence) in results:
             # Step 1: Ensure the recognized text is not empty
