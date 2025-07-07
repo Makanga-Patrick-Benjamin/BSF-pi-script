@@ -5,9 +5,14 @@ import os
 import easyocr
 from datetime import datetime
 import numpy as np
+import requests
+
+#--- configuration for the API  Endpoint---
+API_ENDPOINT = "http://localhost:8000/api/data"  # Replace with your actual API endpoint if needed
+
 
 # --- Configuration ---
-# Database Settings (switch this to your path)/home/pato/Documents/sdf/
+# Database Settings (switch this to your path)
 DATABASE_PATH = "/home/pato/Documents/sdf/BSF-pi-script/text_ocr.db"
 # Directory to store processed images (optional, you can just process in place)
 # IMAGE_STORAGE_DIR = "/home/pato/Documents/sdf/ocr_processed_images"
@@ -60,17 +65,17 @@ def initialize_database():
     conn.close()
     print(f"Database initialized at: {DATABASE_PATH}")
 
-def store_extracted_text(text, image_path, confidence):
-    """Stores extracted text and metadata into the database."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO extracted_text (text_content, image_path, confidence)
-        VALUES (?, ?, ?)
-    ''', (text, image_path, confidence))
-    conn.commit()
-    conn.close()
-    print(f"Stored text: '{text[:50]}...' (Confidence: {confidence:.2f}%)")
+# def store_extracted_text(text, image_path, confidence):
+#     """Stores extracted text and metadata into the database."""
+#     conn = sqlite3.connect(DATABASE_PATH)
+#     cursor = conn.cursor()
+#     cursor.execute('''
+#         INSERT INTO extracted_text (text_content, image_path, confidence)
+#         VALUES (?, ?, ?)
+#     ''', (text, image_path, confidence))
+#     conn.commit()
+#     conn.close()
+#     print(f"Stored text: '{text[:50]}...' (Confidence: {confidence:.2f}%)")
 
 # --- Image Preprocessing for EasyOCR ---
 def preprocess_image_for_easyocr(image):
@@ -146,7 +151,7 @@ def extract_text_with_easyocr(image_path):
 
 # --- Main Processing Loop ---
 def process_images_from_folder():
-    """Main function to process images from a specified folder."""
+    """Main function to process images from a specified folder and send data to FastAPI."""
     os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
     os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True) # Ensure processed directory exists
 
@@ -159,20 +164,108 @@ def process_images_from_folder():
             image_path = os.path.join(INPUT_IMAGE_DIR, filename)
             print(f"Processing image: {image_path}")
 
-            # Extract text using EasyOCR, which is now configured for integers
-            text, confidence = extract_text_with_easyocr(image_path)
-
-            if text:
-                print(f"\n--- Final Extracted Integers (Overall Confidence: {confidence:.2f}%) ---")
-                print(text)
-                store_extracted_text(text, image_path, confidence)
+            # 1. Extract Tray Number using EasyOCR
+            tray_number_str, ocr_confidence = extract_text_with_easyocr(image_path)
+            if tray_number_str:
+                try:
+                    tray_number = int(tray_number_str)
+                    print(f"Detected Tray Number: {tray_number} (Confidence: {ocr_confidence:.2f}%)")
+                    # No longer storing OCR text directly here, it's just for the tray_number
+                except ValueError:
+                    print(f"Warning: Could not convert '{tray_number_str}' to an integer for tray number. Skipping larvae analysis for this image.")
+                    tray_number = None
             else:
-                print("\nNo integers detected in image by EasyOCR.")
+                print("No tray number detected by EasyOCR. Skipping larvae analysis for this image.")
+                tray_number = None
 
-            # Move the processed image to the PROCESSED_IMAGE_DIR
+            if tray_number is None:
+                destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
+                os.rename(image_path, destination_path)
+                print(f"Moved image (no tray number): {image_path} to {destination_path}")
+                continue
+
+            # 2. Perform Larvae Detection and Measurement using YOLOv8
+            print(f"Running YOLOv8 inference on {image_path}...")
+            larvae_data_to_send = [] # Collect all larva data for this image
+            total_count = 0
+            
+            try:
+                yolo_results = model(image_path)
+
+                for result in yolo_results:
+                    if result.boxes:
+                        total_count = len(result.boxes)
+                        print(f"Found {total_count} larvae in Tray {tray_number}.")
+
+                        for larva_id, box in enumerate(result.boxes):
+                            bbox_xyxy = box.xyxy[0].tolist()
+                            larva_confidence = box.conf[0].item()
+
+                            mask = None
+                            if result.masks and len(result.masks.data) > larva_id:
+                                mask = result.masks.data[larva_id].cpu().numpy()
+                                original_h, original_w, _ = cv2.imread(image_path).shape
+                                mask = cv2.resize(mask.astype(np.uint8), (original_w, original_h), interpolation=cv2.INTER_NEAREST)
+
+                            length_mm, width_mm, area_sq_mm, estimated_weight_mg = \
+                                calculate_larva_metrics(bbox_xyxy, mask)
+
+                            # Prepare data for sending
+                            larvae_data_to_send.append({
+                                "tray_number": tray_number,
+                                "length": round(length_mm, 2), # Round for sending
+                                "width": round(width_mm, 2),
+                                "area": round(area_sq_mm, 2),
+                                "weight": round(estimated_weight_mg, 2),
+                                "count": 1 # Each entry is for one larva, total count is summed up later
+                            })
+                            print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
+                    else:
+                        print(f"No larvae detected by YOLOv8 in Tray {tray_number}.")
+
+                # 3. Send data to FastAPI endpoint
+                if larvae_data_to_send:
+                    # For simplicity, we'll send each larva's data individually.
+                    # Alternatively, you could aggregate and send combined metrics and total count.
+                    # If you send individual, `count` will always be 1 for each larva.
+                    # The `LarvaeData` model in Flask has a `count` column; if you store individual
+                    # larvae, that `count` would be 1. If you store aggregated per tray, it's the total.
+                    # The current Flask model seems designed for aggregated data (one entry per timestamp per tray).
+                    # Let's aggregate the data per tray before sending to match the Flask model.
+
+                    if total_count > 0:
+                        avg_length = sum(d['length'] for d in larvae_data_to_send) / total_count
+                        avg_width = sum(d['width'] for d in larvae_data_to_send) / total_count
+                        avg_area = sum(d['area'] for d in larvae_data_to_send) / total_count
+                        avg_weight = sum(d['weight'] for d in larvae_data_to_send) / total_count
+                        
+                        payload = {
+                            "tray_number": tray_number,
+                            "length": round(avg_length, 2),
+                            "width": round(avg_width, 2),
+                            "area": round(avg_area, 2),
+                            "weight": round(avg_weight, 2),
+                            "count": total_count # Total count for this tray
+                        }
+
+                        print(f"Sending aggregated data for Tray {tray_number} to FastAPI: {payload}")
+                        try:
+                            response = requests.post(API_ENDPOINT_URL, json=payload)
+                            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+                            print(f"Data sent successfully to FastAPI. Response: {response.json()}")
+                        except requests.exceptions.RequestException as req_e:
+                            print(f"Error sending data to FastAPI: {req_e}")
+                            print(f"Response content: {req_e.response.text if req_e.response else 'N/A'}")
+                    else:
+                        print(f"No larvae detected for Tray {tray_number}. No data sent to FastAPI.")
+
+            except Exception as e:
+                print(f"Error during YOLOv8 inference or data aggregation for {image_path}: {e}")
+
+            # Move the processed image
             destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
             os.rename(image_path, destination_path)
-            print(f"Moved processed image to: {destination_path}")
+            print(f"Moved processed image: {image_path} to {destination_path}")
     
     if not images_found:
         print("No new images found in the input folder.")
