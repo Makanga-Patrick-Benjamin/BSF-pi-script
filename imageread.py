@@ -8,7 +8,7 @@ import numpy as np
 import requests
 
 #--- configuration for the API  Endpoint---
-API_ENDPOINT = "http://localhost:8000/api/data"  # Replace with your actual API endpoint if needed
+API_ENDPOINT = "http://192.168.228.232:8000/api/data/"  # Replace with your actual API endpoint if needed
 
 
 # --- Configuration ---
