@@ -5,10 +5,11 @@ import os
 import easyocr
 from datetime import datetime
 import numpy as np
+from ultralytics import YOLO # Import YOLO
 import requests
 
 #--- configuration for the API  Endpoint---
-API_ENDPOINT = "http://192.168.228.232:8000/api/data/"  # Replace with your actual API endpoint if needed
+API_ENDPOINT = "http://127.0.0.1:8000/api/data/"  # Replace with your actual API endpoint if needed
 
 
 # --- Configuration ---
@@ -18,7 +19,7 @@ DATABASE_PATH = "/home/pato/Documents/sdf/BSF-pi-script/text_ocr.db"
 # IMAGE_STORAGE_DIR = "/home/pato/Documents/sdf/ocr_processed_images"
 
 # New: Directory containing images to be processed
-INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/BSF-pi-script/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
+INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
 PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/BSF-pi-script/ocr_processed_images" # Directory to move processed images
 
 # EasyOCR Settings
@@ -32,6 +33,17 @@ EASYOCR_BLOCKLIST = '' # Keep blocklist empty when using allowlist
 
 # Script Timing
 PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
+
+# YOLOv8 Model Configuration
+YOLOV8_MODEL_PATH = "/home/pato/Documents/sdf/YoloRetrain.pt" # <--- IMPORTANT: SET PATH TO YOUR TRAINED YOLOv8 MODEL
+
+# Calibration Factor (pixels per millimeter)
+# YOU MUST CALIBRATE THIS FOR YOUR SPECIFIC CAMERA SETUP!
+# To calibrate: Place an object of known real-world dimension (e.g., a ruler) in your image.
+# Measure its length in pixels.
+# PIXELS_PER_MM = (Measured Pixels) / (Known Millimeters)
+# Example: If a 10mm object is 100 pixels, then PIXELS_PER_MM = 100/10 = 10
+PIXELS_PER_MM = 20.0 # Placeholder: Adjust this value based on your calibration!
 
 # --- Initialize EasyOCR Reader ---
 # This will download models on the first run if not present.
@@ -47,6 +59,16 @@ except Exception as e:
     print("Also, check your EasyOCR installation. You might need to update it: pip install easyocr --upgrade")
     exit() # Exit if EasyOCR cannot be initialized
 
+# --- Initialize YOLOv8 Model ---
+print(f"Loading YOLOv8 model from: {YOLOV8_MODEL_PATH}...")
+try:
+    model = YOLO(YOLOV8_MODEL_PATH)
+    print("YOLOv8 model loaded successfully.")
+except Exception as e:
+    print(f"Error loading YOLOv8 model: {e}")
+    print("Please ensure your model path is correct and Ultralytics is installed.")
+    exit()
+
 # --- Database Functions ---
 def initialize_database():
     """Initializes the SQLite database and creates the table if it doesn't exist."""
@@ -59,6 +81,22 @@ def initialize_database():
             image_path TEXT,
             confidence REAL,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Table for larvae measurements
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS larvae_measurements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tray_number INTEGER,
+            larva_id INTEGER, -- Unique ID for each detected larva within a tray/image
+            length_mm REAL,
+            width_mm REAL,
+            area_sq_mm REAL,
+            estimated_weight_mg REAL,
+            confidence REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (tray_number) REFERENCES extracted_text(text_content) -- Link to tray number
         )
     ''')
     conn.commit()
@@ -76,6 +114,19 @@ def initialize_database():
 #     conn.commit()
 #     conn.close()
 #     print(f"Stored text: '{text[:50]}...' (Confidence: {confidence:.2f}%)")
+
+# def store_larvae_data(tray_number, larva_id, length_mm, width_mm, area_sq_mm, estimated_weight_mg, confidence):
+#     """Stores individual larva measurements into the database."""
+#     conn = sqlite3.connect(DATABASE_PATH)
+#     cursor = conn.cursor()
+#     cursor.execute('''
+#         INSERT INTO larvae_measurements (tray_number, larva_id, length_mm, width_mm, area_sq_mm, estimated_weight_mg, confidence)
+#         VALUES (?, ?, ?, ?, ?, ?, ?)
+#     ''', (tray_number, larva_id, length_mm, width_mm, area_sq_mm, estimated_weight_mg, confidence))
+#     conn.commit()
+#     conn.close()
+#     print(f"Stored Larva {larva_id} (Tray {tray_number}): L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg")
+
 
 # --- Image Preprocessing for EasyOCR ---
 def preprocess_image_for_easyocr(image):
@@ -143,11 +194,56 @@ def extract_text_with_easyocr(image_path):
         return None, 0
 
     if extracted_integers:
-        final_extracted_text = "\n".join(extracted_integers)
+        # final_extracted_text = "\n".join(extracted_integers)
+        final_extracted_text = extracted_integers[0]
         overall_avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
         return final_extracted_text, overall_avg_confidence * 100 # Convert to 0-100%
     else:
         return None, 0
+
+# --- Larva Measurement and Weight Estimation ---
+def calculate_larva_metrics(bbox, mask=None):
+    """
+    Calculates length, width, area in pixels from bounding box or mask,
+    then converts to mm and estimates weight.
+    """
+    x1, y1, x2, y2 = bbox
+
+    # Length and width from bounding box (in pixels)
+    length_px = abs(y2 - y1) # Assuming larva is oriented vertically
+    width_px = abs(x2 - x1)  # Assuming larva is oriented horizontally
+
+    # Area calculation
+    if mask is not None:
+        # Use the mask to get a more accurate pixel area
+        area_px = np.sum(mask) # Sum of pixels in the mask
+    else:
+        # Fallback to bounding box area if no mask (less accurate for irregular shapes)
+        area_px = length_px * width_px
+
+    # Convert pixel measurements to real-world measurements (mm)
+    length_mm = length_px / PIXELS_PER_MM
+    width_mm = width_px / PIXELS_PER_MM
+    area_sq_mm = area_px / (PIXELS_PER_MM ** 2)
+
+    # --- Weight Estimation ---
+    # THIS IS A CRITICAL PART YOU NEED TO CALIBRATE!
+    # A simple linear model (example: weight is proportional to area)
+    # You will need to determine a more accurate model (e.g., polynomial regression)
+    # based on actual measurements of your larvae.
+    # Example: If 1 sq mm of larva area corresponds to X mg of weight.
+    # You might find that larger larvae have a different density or shape.
+    # For now, a very basic placeholder:
+    # A common range for BSF larvae is 20-200mg.
+    # Let's assume a simple average larva might be ~5mm long, ~1.5mm wide (roughly 7.5 sq mm area) and 50mg.
+    # So, 50mg / 7.5 sq mm = ~6.67 mg/sq mm. This is a very rough estimate.
+    # Consider using a more robust model like: weight = a * length_mm + b * width_mm + c
+    # Or, weight = K * (area_sq_mm ** exponent)
+    WEIGHT_PER_SQ_MM = 6.67 # Placeholder: Adjust this based on your empirical data!
+    estimated_weight_mg = area_sq_mm * WEIGHT_PER_SQ_MM
+
+    return length_mm, width_mm, area_sq_mm, estimated_weight_mg
+
 
 # --- Main Processing Loop ---
 def process_images_from_folder():
@@ -272,7 +368,7 @@ def process_images_from_folder():
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
-    initialize_database()
+    # initialize_database()
 
     try:
         while True:

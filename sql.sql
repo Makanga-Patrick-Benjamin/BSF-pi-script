@@ -6,4 +6,5 @@
 --     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 -- );
 
-SELECT * FROM extracted_text;
+-- SELECT * FROM extracted_text;
+SELECT * FROM larvae_measurements;
