@@ -9,7 +9,7 @@ from ultralytics import YOLO # Import YOLO
 import requests
 
 #--- configuration for the API  Endpoint---
-API_ENDPOINT = "http://10.42.0.1:8001/api/data/"  # Replace with your actual API endpoint if needed
+API_ENDPOINT = "http://137.63.212.168:8001/api/data/"  # Replace with your actual API endpoint if needed
 
 
 # --- Configuration ---
@@ -346,7 +346,7 @@ def process_images_from_folder():
 
                         print(f"Sending aggregated data for Tray {tray_number} to FastAPI: {payload}")
                         try:
-                            response = requests.post(API_ENDPOINT_URL, json=payload)
+                            response = requests.post(API_ENDPOINT, json=payload)
                             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
                             print(f"Data sent successfully to FastAPI. Response: {response.json()}")
                         except requests.exceptions.RequestException as req_e:
