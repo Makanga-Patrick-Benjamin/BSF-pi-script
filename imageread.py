@@ -9,12 +9,12 @@ from ultralytics import YOLO # Import YOLO
 import requests
 
 #--- configuration for the API  Endpoint---
-API_ENDPOINT = "http://127.0.0.1:8000/api/data/"  # Replace with your actual API endpoint if needed
+API_ENDPOINT = "http://127.0.0.1:8001/api/data/"  # Replace with your actual API endpoint if needed
 
 
 # --- Configuration ---
 # Database Settings (switch this to your path)
-DATABASE_PATH = "/home/pato/Documents/sdf/BSF-pi-script/text_ocr.db"
+# DATABASE_PATH = "/home/pato/Documents/sdf/BSF-pi-script/text_ocr.db"
 # Directory to store processed images (optional, you can just process in place)
 # IMAGE_STORAGE_DIR = "/home/pato/Documents/sdf/ocr_processed_images"
 
@@ -70,38 +70,38 @@ except Exception as e:
     exit()
 
 # --- Database Functions ---
-def initialize_database():
-    """Initializes the SQLite database and creates the table if it doesn't exist."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS extracted_text (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            text_content TEXT,
-            image_path TEXT,
-            confidence REAL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+# def initialize_database():
+#     """Initializes the SQLite database and creates the table if it doesn't exist."""
+#     conn = sqlite3.connect(DATABASE_PATH)
+#     cursor = conn.cursor()
+#     cursor.execute('''
+#         CREATE TABLE IF NOT EXISTS extracted_text (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             text_content TEXT,
+#             image_path TEXT,
+#             confidence REAL,
+#             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+#         )
+#     ''')
 
-    # Table for larvae measurements
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS larvae_measurements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tray_number INTEGER,
-            larva_id INTEGER, -- Unique ID for each detected larva within a tray/image
-            length_mm REAL,
-            width_mm REAL,
-            area_sq_mm REAL,
-            estimated_weight_mg REAL,
-            confidence REAL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tray_number) REFERENCES extracted_text(text_content) -- Link to tray number
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print(f"Database initialized at: {DATABASE_PATH}")
+#     # Table for larvae measurements
+#     cursor.execute('''
+#         CREATE TABLE IF NOT EXISTS larvae_measurements (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             tray_number INTEGER,
+#             larva_id INTEGER, -- Unique ID for each detected larva within a tray/image
+#             length_mm REAL,
+#             width_mm REAL,
+#             area_sq_mm REAL,
+#             estimated_weight_mg REAL,
+#             confidence REAL,
+#             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+#             FOREIGN KEY (tray_number) REFERENCES extracted_text(text_content) -- Link to tray number
+#         )
+#     ''')
+#     conn.commit()
+#     conn.close()
+#     print(f"Database initialized at: {DATABASE_PATH}")
 
 # def store_extracted_text(text, image_path, confidence):
 #     """Stores extracted text and metadata into the database."""

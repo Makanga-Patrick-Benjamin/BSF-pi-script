@@ -1,0 +1,7 @@
+2025-07-13 11:44:15,900 - WARNING - Using CPU. Note: This module is much faster with a GPU.
+2025-07-13 11:44:21,313 - INFO - EasyOCR initialized successfully
+2025-07-13 11:44:26,010 - INFO - YOLOv8 model loaded successfully
+2025-07-13 11:44:26,011 - ERROR - SQLite error: incomplete input
+2025-07-13 11:44:26,011 - ERROR - Database initialization failed: incomplete input
+2025-07-13 11:44:26,011 - ERROR - Fatal error: incomplete input
+2025-07-13 11:44:26,020 - INFO - Processing stopped
