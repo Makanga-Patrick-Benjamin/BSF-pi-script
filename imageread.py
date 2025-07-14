@@ -9,7 +9,7 @@ from ultralytics import YOLO # Import YOLO
 import requests
 
 #--- configuration for the API  Endpoint---
-API_ENDPOINT = "http://127.0.0.1:8001/api/data/"  # Replace with your actual API endpoint if needed
+API_ENDPOINT = "http://10.42.0.1:8001/api/data/"  # Replace with your actual API endpoint if needed
 
 
 # --- Configuration ---
