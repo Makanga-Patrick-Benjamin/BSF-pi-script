@@ -28,4 +28,4 @@ A Bash script designed to simplify the installation and configuration of the BSF
    pip3 install -r requirements.txt
 5.  Execute the Script:
    ```bash
-   python3 script.py
+   python3 imageread.py
