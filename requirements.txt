@@ -1,5 +1,8 @@
 easyocr==1.7.2
-numpy==2.3.1
+numpy==1.24.2
+opencv_python==4.11.0.86
+opencv_python_headless==4.11.0.86
+paho_mqtt==1.6.1
 picamera2==0.3.27
-Requests==2.32.4
+picamera2==0.3.29
 ultralytics==8.3.166
