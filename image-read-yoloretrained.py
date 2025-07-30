@@ -15,7 +15,7 @@ MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique 
                                       # E.g., "your_username/bsf_monitor/larvae_data"
 
 # --- Callbacks for MQTT Client ---
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties):
     if rc == 0:
         print("Connected to MQTT Broker!")
     else:
@@ -60,7 +60,7 @@ except Exception as e:
     exit()
 
 # --- Initialize MQTT Client ---
-mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1) # Specify API version
+mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2) # Specify API version
 # mqtt_client = mqtt.Client()
 mqtt_client.on_connect = on_connect
 try:

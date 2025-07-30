@@ -21,7 +21,7 @@ MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique 
                                       # E.g., "your_username/bsf_monitor/larvae_data"
 
 # --- Callbacks for MQTT Client ---
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties):
     """Callback function for when the MQTT client connects to the broker."""
     if rc == 0:
         print("Connected to MQTT Broker!")
@@ -255,7 +255,7 @@ def process_images_from_folder():
                         
                         # --- FIX: Accessing confidence scores from .boxes.conf ---
                         # Access confidence scores from the 'conf' attribute of the 'boxes' object
-                        larva_confidence = prediction_results.boxes.conf[larva_id].item() # Convert tensor scalar to float
+                        larva_confidence = prediction_results.conf[larva_id].item() # Convert tensor scalar to float
 
                         mask = None
                         # Check if masks are present and if there's a mask for the current larva_id
