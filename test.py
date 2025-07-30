@@ -243,7 +243,8 @@ def process_images_from_folder():
 
                 # --- FIX: Accessing results from TensorPredictions object ---
                 # Check if any larvae were detected by checking if the 'boxes' tensor is not empty
-                if prediction_results and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
+                # Also ensure 'boxes' attribute exists before trying to access its length or content.
+                if prediction_results and hasattr(prediction_results, 'boxes') and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
                     total_count = len(prediction_results.boxes)
                     print(f"Found {total_count} larvae in Tray {tray_number}.")
 
@@ -251,11 +252,14 @@ def process_images_from_folder():
                     for larva_id in range(total_count):
                         # Extract bounding box (xyxy format)
                         bbox_xyxy = prediction_results.boxes[larva_id].tolist() # Convert tensor to list
-                        larva_confidence = prediction_results.scores[larva_id].item() # Convert tensor scalar to float
+                        
+                        # --- FIX: Accessing confidence scores from .boxes.conf ---
+                        # Access confidence scores from the 'conf' attribute of the 'boxes' object
+                        larva_confidence = prediction_results.boxes.conf[larva_id].item() # Convert tensor scalar to float
 
                         mask = None
                         # Check if masks are present and if there's a mask for the current larva_id
-                        if prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
+                        if hasattr(prediction_results, 'masks') and prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
                             # Access the specific mask for this larva
                             # Convert mask to numpy array and ensure it's binary (0 or 1)
                             mask = prediction_results.masks[larva_id].cpu().numpy().astype(np.uint8)
