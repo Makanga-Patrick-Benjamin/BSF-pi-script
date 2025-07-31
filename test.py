@@ -21,6 +21,7 @@ MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique 
                                       # E.g., "your_username/bsf_monitor/larvae_data"
 
 # --- Callbacks for MQTT Client ---
+# FIX: Updated on_connect signature for paho.mqtt.CallbackAPIVersion.VERSION2
 def on_connect(client, userdata, flags, rc, properties):
     """Callback function for when the MQTT client connects to the broker."""
     if rc == 0:
@@ -253,16 +254,17 @@ def process_images_from_folder():
                         # Extract bounding box (xyxy format)
                         bbox_xyxy = prediction_results.boxes[larva_id].tolist() # Convert tensor to list
                         
-                        # --- FIX: Accessing confidence scores from .boxes.conf ---
-                        # Access confidence scores from the 'conf' attribute of the 'boxes' object
-                        larva_confidence = prediction_results.conf[larva_id].item() # Convert tensor scalar to float
+                        # Access confidence scores from the 'confs' attribute of the prediction_results object
+                        larva_confidence = prediction_results.confs[larva_id].item() # Convert tensor scalar to float
 
                         mask = None
                         # Check if masks are present and if there's a mask for the current larva_id
+                        # FIX: Access the 'data' attribute of the Masks object for the raw mask tensor
                         if hasattr(prediction_results, 'masks') and prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
-                            # Access the specific mask for this larva
-                            # Convert mask to numpy array and ensure it's binary (0 or 1)
-                            mask = prediction_results.masks[larva_id].cpu().numpy().astype(np.uint8)
+                            # Access the specific Masks object for this larva
+                            larva_mask_object = prediction_results.masks[larva_id]
+                            # Access the raw data tensor from the Masks object, then convert to numpy and cast
+                            mask = larva_mask_object.data.cpu().numpy().astype(np.uint8)
                             # The mask is typically already at the original image resolution or scaled appropriately
                             # for area calculation. No explicit resizing here unless flat-bug's output dictates it.
 
