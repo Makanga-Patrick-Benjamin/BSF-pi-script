@@ -8,7 +8,6 @@ import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
 
 # --- Flat-Bug Model Imports ---
-# You need to have the flat-bug library installed: pip install flat-bug
 from flat_bug.predictor import Predictor
 from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
 from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
@@ -17,9 +16,10 @@ from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's in
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883 # Standard unencrypted MQTT port
 MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique for your project!
+                                      # E.g., "your_username/bsf_monitor/larvae_data"
 
 # --- Callbacks for MQTT Client ---
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties):
     """Callback function for when the MQTT client connects to the broker."""
     if rc == 0:
         print("Connected to MQTT Broker!")
@@ -29,6 +29,7 @@ def on_connect(client, userdata, flags, rc):
 # --- Configuration ---
 INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
 PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/BSF-pi-script/ocr_processed_images" # Directory to move processed images
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" 
 
 # EasyOCR Settings
 EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
@@ -39,21 +40,16 @@ EASYOCR_BLOCKLIST = ''
 PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
-# <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/best1024.pt"
-# Choose device: 'cuda:0' for GPU (if available), 'cpu' for CPU
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/best1024.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
 FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 
 # Calibration Factor (pixels per millimeter)
-# Placeholder: Adjust this value based on your camera setup and calibration!
-# You'll need to determine how many pixels correspond to 1 millimeter in your images.
 PIXELS_PER_MM = 20.0
 
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    # Set gpu=False for EasyOCR if running on CPU-only device like most Raspberry Pis
     reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
@@ -64,12 +60,7 @@ except Exception as e:
 # --- Initialize Flat-Bug Model ---
 print(f"Loading Flat-Bug model from: {FLATBUG_MODEL_PATH} on device: {FLATBUG_DEVICE}...")
 try:
-    # Load default configuration or a custom one if needed
     flatbug_config = DEFAULT_CFG
-    # You can set flatbug_logger level to DEBUG for more verbose output from flat-bug
-    # set_log_level("DEBUG")
-
-    # Initialize the Predictor
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
         device=FLATBUG_DEVICE,
@@ -83,11 +74,11 @@ except Exception as e:
     exit()
 
 # --- Initialize MQTT Client ---
-mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1) # Specify API version
+mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_client.on_connect = on_connect
 try:
     mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    mqtt_client.loop_start() # Start the loop in a background thread to handle re-connections
+    mqtt_client.loop_start() 
 except Exception as e:
     print(f"Failed to connect to MQTT broker: {e}")
     exit()
@@ -98,7 +89,7 @@ def preprocess_image_for_easyocr(image):
     if image is None or image.size == 0:
         return None
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.medianBlur(gray, 3) # Helps remove noise that might interfere with OCR
+    denoised = cv2.medianBlur(gray, 3) 
     return denoised
 
 # --- Text Extraction Function (EasyOCR) ---
@@ -120,17 +111,15 @@ def extract_text_with_easyocr(image_path):
     all_confidences = []
 
     try:
-        # Use allowlist to restrict OCR to only digits
         results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST)
 
         for (bbox, text, confidence) in results:
-            if text.strip(): # Check if text is not empty
-                # Filter out non-digit characters from the recognized text
+            if text.strip():
                 cleaned_text = ''.join(filter(str.isdigit, text.strip()))
                 if cleaned_text:
                     try:
-                        integer_value = int(cleaned_text) # Convert to int to validate
-                        extracted_integers.append(str(integer_value)) # Store as string
+                        integer_value = int(cleaned_text)
+                        extracted_integers.append(str(integer_value))
                         all_confidences.append(float(confidence))
                         print(f"  Recognized integer '{integer_value}' with confidence: {float(confidence):.2f}")
                     except ValueError:
@@ -145,8 +134,6 @@ def extract_text_with_easyocr(image_path):
         return None, 0
 
     if extracted_integers:
-        # For simplicity, take the first recognized integer.
-        # More robust logic might involve choosing based on confidence or position.
         final_extracted_text = extracted_integers[0]
         overall_avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
         return final_extracted_text, overall_avg_confidence * 100
@@ -165,20 +152,15 @@ def calculate_larva_metrics(bbox, mask=None):
 
     area_px = 0
     if mask is not None:
-        # Sum of pixels in the mask where the larva is present
         area_px = np.sum(mask)
     else:
-        # Fallback to bounding box area if no mask is provided
         area_px = length_px * width_px
 
-    # Convert pixel measurements to real-world units using calibration factor
     length_mm = length_px / PIXELS_PER_MM
     width_mm = width_px / PIXELS_PER_MM
     area_sq_mm = area_px / (PIXELS_PER_MM ** 2)
 
-    # Placeholder for weight estimation: Adjust this based on your empirical data!
-    # This is a simple linear relationship; a more complex model might be needed.
-    WEIGHT_PER_SQ_MM = 6.67 # Example: mg per square millimeter of larva area
+    WEIGHT_PER_SQ_MM = 6.67
     estimated_weight_mg = area_sq_mm * WEIGHT_PER_SQ_MM
 
     return length_mm, width_mm, area_sq_mm, estimated_weight_mg
@@ -191,6 +173,7 @@ def process_images_from_folder():
     """
     os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
     os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True) # NEW: Ensure output directory exists
 
     print(f"\n--- Checking for new images in {INPUT_IMAGE_DIR} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
 
@@ -201,7 +184,6 @@ def process_images_from_folder():
             image_path = os.path.join(INPUT_IMAGE_DIR, filename)
             print(f"Processing image: {image_path}")
 
-            # Step 1: Extract Tray Number using EasyOCR
             tray_number_str, ocr_confidence = extract_text_with_easyocr(image_path)
             if tray_number_str:
                 try:
@@ -214,50 +196,40 @@ def process_images_from_folder():
                 print("No tray number detected by EasyOCR. Skipping larvae analysis for this image.")
                 tray_number = None
 
-            # If no valid tray number, just move the image and continue
             if tray_number is None:
                 destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
                 os.rename(image_path, destination_path)
                 print(f"Moved image (no tray number detected): {image_path} to {destination_path}")
                 continue
 
-            # Step 2: Run Flat-Bug Inference for Larva Detection and Measurement
             print(f"Running Flat-Bug inference on {image_path}...")
             larvae_data_to_send = []
             total_count = 0
 
             try:
-                # Perform inference using the flat-bug predictor
-                # pyramid_predictions is good for robust detection but can be slow.
-                # For faster inference, you might use a simpler prediction method if available
-                # or adjust scale_before/single_scale parameters.
                 prediction_results = flatbug_predictor.pyramid_predictions(
                     image_path,
-                    scale_increment=2/3, # Default for pyramid_predictions
-                    scale_before=1.0,    # No initial downscaling before detection
-                    single_scale=False   # Use multi-scale prediction
+                    scale_increment=2/3,
+                    scale_before=1.0,
+                    single_scale=False
                 )
 
-                # Check if any larvae were detected
-                if prediction_results and prediction_results.instances:
-                    total_count = len(prediction_results.instances)
+                if prediction_results and hasattr(prediction_results, 'boxes') and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
+                    total_count = len(prediction_results.boxes)
                     print(f"Found {total_count} larvae in Tray {tray_number}.")
 
-                    for larva_id, instance in enumerate(prediction_results.instances):
-                        # Extract bounding box (xyxy format)
-                        bbox_xyxy = instance.bbox.tolist() # [x1, y1, x2, y2]
-                        larva_confidence = instance.score # Confidence score
+                    # NEW: Load the original image to draw on
+                    original_image = cv2.imread(image_path)
+                    
+                    for larva_id in range(total_count):
+                        bbox_xyxy = prediction_results.boxes[larva_id].tolist()
+                        larva_confidence = prediction_results.confs[larva_id].item()
 
                         mask = None
-                        if instance.mask is not None:
-                            # Convert mask to numpy array and ensure it's binary (0 or 1)
-                            # instance.mask is a torch tensor, move to CPU and convert to numpy
-                            mask = instance.mask.cpu().numpy().astype(np.uint8)
-                            # Resize mask to original image dimensions if needed (flat-bug handles this internally,
-                            # but if you need the mask for visualization or other purposes, ensure its size)
-                            # For area calculation, the mask's pixel count is directly usable.
+                        if hasattr(prediction_results, 'masks') and prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
+                            larva_mask_object = prediction_results.masks[larva_id]
+                            mask = larva_mask_object.data.cpu().numpy().astype(np.uint8)
 
-                        # Calculate metrics using the extracted bbox and mask
                         length_mm, width_mm, area_sq_mm, estimated_weight_mg = \
                             calculate_larva_metrics(bbox_xyxy, mask)
 
@@ -267,15 +239,30 @@ def process_images_from_folder():
                             "width": round(width_mm, 2),
                             "area": round(area_sq_mm, 2),
                             "weight": round(estimated_weight_mg, 2),
-                            "count": 1 # Each entry is for one larva
+                            "count": 1
                         })
                         print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
+
+                        # NEW: Drawing the bounding box and label on the image
+                        x1, y1, x2, y2 = [int(i) for i in bbox_xyxy]
+                        label = f"{larva_confidence * 100:.2f}%"
+                        color = (0, 255, 0)  # Green color in BGR
+                        thickness = 2
+                        font_scale = 0.5
+                        font_thickness = 1
+
+                        cv2.rectangle(original_image, (x1, y1), (x2, y2), color, thickness)
+                        cv2.putText(original_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+                    
+                    # NEW: Save the image with detections to the new directory
+                    output_image_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
+                    cv2.imwrite(output_image_path, original_image)
+                    print(f"Saved image with detections to: {output_image_path}")
+
                 else:
                     print(f"No larvae detected by Flat-Bug in Tray {tray_number}.")
 
-                # Step 3: Aggregate and Send Data via MQTT
                 if total_count > 0:
-                    # Calculate averages for the detected larvae in this image/tray
                     avg_length = sum(d['length'] for d in larvae_data_to_send) / total_count
                     avg_width = sum(d['width'] for d in larvae_data_to_send) / total_count
                     avg_area = sum(d['area'] for d in larvae_data_to_send) / total_count
@@ -287,12 +274,12 @@ def process_images_from_folder():
                         "width": round(avg_width, 2),
                         "area": round(avg_area, 2),
                         "weight": round(avg_weight, 2),
-                        "count": total_count # Total count for this tray from this image
+                        "count": total_count
                     }
 
                     print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
                     try:
-                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1) # QoS 1 for at least once delivery
+                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
                         print(f"Data published successfully to MQTT broker.")
                     except Exception as mqtt_e:
                         print(f"Error publishing data to MQTT broker: {mqtt_e}")
@@ -301,11 +288,9 @@ def process_images_from_folder():
 
             except Exception as e:
                 print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
-                # It's good practice to log the full traceback for debugging
                 import traceback
                 traceback.print_exc()
 
-            # Step 4: Move the processed image
             destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
             os.rename(image_path, destination_path)
             print(f"Moved processed image: {image_path} to {destination_path}")
@@ -326,8 +311,8 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         import traceback
-        traceback.print_exc() # Print traceback for unexpected errors
+        traceback.print_exc()
     finally:
-        mqtt_client.loop_stop() # Stop the MQTT loop
-        mqtt_client.disconnect() # Disconnect from the broker
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
         print("Program finished.")
