@@ -1,213 +1,340 @@
-import sqlite3
 import time
-from picamera2 import Picamera2
 import cv2
 import os
 import easyocr
 from datetime import datetime
 import numpy as np
-import locale
+import paho.mqtt.client as mqtt # Import MQTT library
+import json # To send data as JSON
 
-# Set locale to avoid warnings
-locale.setlocale(locale.LC_ALL, 'C')
+# --- Flat-Bug Model Imports ---
+from flat_bug.predictor import Predictor
+from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
+from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
+
+# --- MQTT Configuration ---
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883 # Standard unencrypted MQTT port
+MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique for your project!
+                                      # E.g., "your_username/bsf_monitor/larvae_data"
+
+# --- Callbacks for MQTT Client ---
+def on_connect(client, userdata, flags, rc, properties):
+    """Callback function for when the MQTT client connects to the broker."""
+    if rc == 0:
+        print("Connected to MQTT Broker!")
+    else:
+        print(f"Failed to connect, return code {rc}\n")
 
 # --- Configuration ---
-# Camera Settings
-CAMERA_RESOLUTION = (1280, 720)  # Reduced resolution for better performance
-CAMERA_WARMUP_TIME = 1.5  # seconds, allow camera to adjust
+INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
+PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images
 
-# Database Settings - Update this to your path
-DATABASE_PATH = "/home/pato/Documents/sdf/text_ocr.db"
-IMAGE_STORAGE_DIR = "/home/pato/Documents/sdf/ocr_images"
+# NEW: Directories for enhanced outputs
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
+OUTPUT_CROPS_DIR = "/home/pato/Documents/sdf/BSF-pi-script/larva_crops"      # Cropped images of individual larvae
+OUTPUT_METADATA_DIR = "/home/pato/Documents/sdf/BSF-pi-script/larva_metadata" # JSON metadata for detections
 
 # EasyOCR Settings
-EASYOCR_LANGUAGES = ['en']  # English language
-MODEL_STORAGE = 'easyocr_models'  # Directory to store downloaded models
+EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
+EASYOCR_ALLOWLIST = '0123456789' # Only allow digits for tray number recognition
+EASYOCR_BLOCKLIST = ''
 
 # Script Timing
-CAPTURE_INTERVAL_SECONDS = 30  # Time between captures
+PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
-# --- Initialize Hardware ---
-picam2 = Picamera2()
-try:
-    camera_config = picam2.create_still_configuration(main={"size": CAMERA_RESOLUTION})
-    picam2.configure(camera_config)
-except Exception as e:
-    print(f"Camera initialization error: {e}")
-    exit(1)
+# Flat-Bug Model Configuration
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/best1024.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
+FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
+FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
+
+# Calibration Factor (pixels per millimeter)
+PIXELS_PER_MM = 20.0
 
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    reader = easyocr.Reader(
-        EASYOCR_LANGUAGES,
-        gpu=False,
-        model_storage_directory=MODEL_STORAGE,
-        download_enabled=True
-    )
-    print("EasyOCR reader initialized successfully.")
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
+    print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
-    print("Please ensure you have an internet connection for the first run.")
-    exit(1)
+    print("Please ensure you have an internet connection for the first run to download models.")
+    exit()
 
-# --- Database Functions ---
-def initialize_database():
-    """Initializes the SQLite database and creates the table if it doesn't exist."""
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS extracted_text (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text_content TEXT,
-                image_path TEXT,
-                confidence REAL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        print(f"Database initialized at: {DATABASE_PATH}")
-    except Exception as e:
-        print(f"Database initialization error: {e}")
-        exit(1)
+# --- Initialize Flat-Bug Model ---
+print(f"Loading Flat-Bug model from: {FLATBUG_MODEL_PATH} on device: {FLATBUG_DEVICE}...")
+try:
+    flatbug_config = DEFAULT_CFG
+    # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
+    flatbug_predictor = Predictor(
+        FLATBUG_MODEL_PATH,
+        device=FLATBUG_DEVICE,
+        dtype=FLATBUG_DTYPE,
+        cfg=flatbug_config
+    )
+    print("Flat-Bug model loaded successfully.")
+except Exception as e:
+    print(f"Error loading Flat-Bug model: {e}")
+    print("Please ensure your model path is correct and flat-bug library is installed.")
+    exit()
 
-def store_extracted_text(text, image_path, confidence):
-    """Stores extracted text and metadata into the database."""
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO extracted_text (text_content, image_path, confidence)
-            VALUES (?, ?, ?)
-        ''', (text, image_path, confidence))
-        conn.commit()
-        conn.close()
-        print(f"Stored text: '{text[:50]}...' (Confidence: {confidence:.2f}%)")
-    except Exception as e:
-        print(f"Database storage error: {e}")
+# --- Initialize MQTT Client ---
+mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+mqtt_client.on_connect = on_connect
+try:
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client.loop_start() 
+except Exception as e:
+    print(f"Failed to connect to MQTT broker: {e}")
+    exit()
 
-# --- Image Processing Functions ---
-def preprocess_image_for_digits(image):
-    """Enhanced preprocessing specifically for digit recognition"""
-    try:
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Increase contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        contrast_enhanced = clahe.apply(gray)
-        
-        # Thresholding
-        _, thresh = cv2.threshold(contrast_enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
-        # Clean up noise
-        kernel = np.ones((2,2), np.uint8)
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        
-        return cleaned
-    except Exception as e:
-        print(f"Image preprocessing error: {e}")
+# --- Image Preprocessing for EasyOCR ---
+def preprocess_image_for_easyocr(image):
+    """Converts image to grayscale and applies median blur for OCR."""
+    if image is None or image.size == 0:
         return None
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.medianBlur(gray, 3) 
+    return denoised
 
-# --- Text Extraction Function ---
-def extract_digits_with_easyocr(image_path):
+# --- Text Extraction Function (EasyOCR) ---
+def extract_text_with_easyocr(image_path):
     """
-    Extracts digits from an image using EasyOCR with:
-    - Specialized preprocessing for digits
-    - Post-processing to filter only numeric characters
+    Extracts integer text (assumed to be tray number) from an image using EasyOCR.
+    Returns the extracted integer as a string and its confidence.
     """
-    try:
-        image = cv2.imread(image_path)
-        if image is None:
-            print(f"Error: Could not read image {image_path}")
-            return None, 0
-
-        processed_image = preprocess_image_for_digits(image)
-        if processed_image is None:
-            return None, 0
-
-        extracted_digits = []
-        all_confidences = []
-
-        # Perform OCR
-        results = reader.readtext(processed_image, detail=1)
-
-        for (bbox, text, confidence) in results:
-            # Extract only digits from the recognized text
-            digits = ''.join([c for c in text if c.isdigit()])
-            
-            if digits:
-                extracted_digits.append(digits)
-                all_confidences.append(confidence)
-                print(f"  Recognized digits '{digits}' with confidence: {confidence:.2f}")
-
-        if extracted_digits:
-            # Join all found digits with newlines
-            final_text = "\n".join(extracted_digits)
-            avg_confidence = (sum(all_confidences)/len(all_confidences)) * 100
-            return final_text, avg_confidence
-        else:
-            return None, 0
-
-    except Exception as e:
-        print(f"OCR processing error: {e}")
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Error: Could not read image {image_path}")
         return None, 0
 
-# --- Main Capture Function ---
-def capture_and_process_image():
-    """Main function to capture and process images"""
+    processed_image = preprocess_image_for_easyocr(image)
+    if processed_image is None:
+        return None, 0
+
+    extracted_integers = []
+    all_confidences = []
+
     try:
-        # Create storage directory if needed
-        os.makedirs(IMAGE_STORAGE_DIR, exist_ok=True)
-        
-        # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        image_path = os.path.join(IMAGE_STORAGE_DIR, f"capture_{timestamp}.jpg")
+        results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST)
 
-        # Capture image
-        print(f"\nCapturing image at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        picam2.start()
-        time.sleep(CAMERA_WARMUP_TIME)
-        picam2.capture_file(image_path)
-        picam2.stop()
-        print(f"Image saved to: {image_path}")
-
-        # Extract digits
-        text, confidence = extract_digits_with_easyocr(image_path)
-
-        if text:
-            print(f"\nExtracted digits (Confidence: {confidence:.2f}%):")
-            print("=" * 40)
-            print(text)
-            print("=" * 40)
-            store_extracted_text(text, image_path, confidence)
-        else:
-            print("\nNo digits detected in image.")
-            os.remove(image_path)
-            print(f"Removed image: {image_path}")
+        for (bbox, text, confidence) in results:
+            if text.strip():
+                cleaned_text = ''.join(filter(str.isdigit, text.strip()))
+                if cleaned_text:
+                    try:
+                        integer_value = int(cleaned_text)
+                        extracted_integers.append(str(integer_value))
+                        all_confidences.append(float(confidence))
+                        # print(f"  Recognized integer '{integer_value}' with confidence: {float(confidence):.2f}")
+                    except ValueError:
+                        print(f"  Skipping non-integer segment after filtering: '{cleaned_text}' from original '{text}'")
+                else:
+                    print(f"  No digits found after filtering: '{text}'")
+            else:
+                print("  Skipping empty text detection.")
 
     except Exception as e:
-        print(f"Capture/processing error: {e}")
+        print(f"Error during EasyOCR processing: {e}")
+        return None, 0
 
-# --- Main Execution ---
+    if extracted_integers:
+        final_extracted_text = extracted_integers[0]
+        overall_avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
+        return final_extracted_text, overall_avg_confidence * 100
+    else:
+        return None, 0
+
+# --- Larva Measurement and Weight Estimation ---
+def calculate_larva_metrics(bbox, mask=None):
+    """
+    Calculates larva length, width, area, and estimated weight based on bounding box and mask.
+    Assumes bbox is [x1, y1, x2, y2] in pixels.
+    """
+    x1, y1, x2, y2 = bbox
+    length_px = abs(y2 - y1)
+    width_px = abs(x2 - x1)
+
+    area_px = 0
+    if mask is not None:
+        area_px = np.sum(mask)
+    else:
+        area_px = length_px * width_px
+
+    length_mm = length_px / PIXELS_PER_MM
+    width_mm = width_px / PIXELS_PER_MM
+    area_sq_mm = area_px / (PIXELS_PER_MM ** 2)
+
+    WEIGHT_PER_SQ_MM = 6.67
+    estimated_weight_mg = area_sq_mm * WEIGHT_PER_SQ_MM
+
+    return length_mm, width_mm, area_sq_mm, estimated_weight_mg
+
+# --- Main Processing Loop ---
+def process_images_from_folder():
+    """
+    Monitors the input directory for new images, processes them,
+    and publishes aggregated data to MQTT.
+    """
+    os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
+    os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_CROPS_DIR, exist_ok=True)    # NEW: Create crops directory
+    os.makedirs(OUTPUT_METADATA_DIR, exist_ok=True) # NEW: Create metadata directory
+
+    print(f"\n--- Checking for new images in {INPUT_IMAGE_DIR} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+
+    images_found = False
+    for filename in os.listdir(INPUT_IMAGE_DIR):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+            images_found = True
+            image_path = os.path.join(INPUT_IMAGE_DIR, filename)
+            print(f"Processing image: {image_path}")
+
+            tray_number_str, ocr_confidence = extract_text_with_easyocr(image_path)
+            if tray_number_str:
+                try:
+                    tray_number = int(tray_number_str)
+                    print(f"Detected Tray Number: {tray_number} (Confidence: {ocr_confidence:.2f}%)")
+                except ValueError:
+                    print(f"Warning: Could not convert '{tray_number_str}' to an integer for tray number. Skipping larvae analysis for this image.")
+                    tray_number = None
+            else:
+                print("No tray number detected by EasyOCR. Skipping larvae analysis for this image.")
+                tray_number = None
+
+            if tray_number is None:
+                destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
+                os.rename(image_path, destination_path)
+                print(f"Moved image (no tray number detected): {image_path} to {destination_path}")
+                continue
+
+            print(f"Running Flat-Bug inference on {image_path}...")
+            larvae_data_to_send = []
+            total_count = 0
+
+            try:
+                prediction_results = flatbug_predictor.pyramid_predictions(
+                    image_path,
+                    scale_increment=2/3,
+                    scale_before=1.0,
+                    single_scale=False
+                )
+
+                # Get the base name for output files (e.g., "image29")
+                base_filename = os.path.splitext(filename)[0]
+                
+                if prediction_results and hasattr(prediction_results, 'boxes') and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
+                    total_count = len(prediction_results.boxes)
+                    print(f"Found {total_count} larvae in Tray {tray_number}.")
+
+                    # NEW: Use prediction_results.plot() for overview image
+                    output_overview_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
+                    prediction_results.plot(
+                        outpath=output_overview_path,
+                        masks=True, # Set to True if your model predicts masks and you want to visualize them
+                        boxes=True,
+                        confidence=True,
+                        linewidth=2,
+                        contour_color=(0, 255, 0), # Green for mask contours
+                        box_color=(255, 0, 0) # Red for bounding boxes
+                    )
+                    print(f"Saved image with detections to: {output_overview_path}")
+
+                    # NEW: Save cropped images of individual larvae
+                    prediction_results.save_crops(
+                        outdir=OUTPUT_CROPS_DIR,
+                        basename=base_filename,
+                        mask=True # Set to True to save masked crops (RGBA)
+                    )
+                    print(f"Saved cropped larvae images to: {OUTPUT_CROPS_DIR}")
+
+                    # NEW: Save detailed JSON metadata for all detections in this image
+                    # The identifier ensures unique metadata files if multiple images have the same base name
+                    metadata_identifier = f"{base_filename}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    prediction_results.serialize(
+                        outpath=os.path.join(OUTPUT_METADATA_DIR, f"metadata_{base_filename}"),
+                        save_json=True,
+                        identifier=metadata_identifier
+                    )
+                    print(f"Saved detection metadata to: {OUTPUT_METADATA_DIR}")
+
+                    # Continue with calculating metrics for MQTT payload
+                    for larva_id in range(total_count):
+                        bbox_xyxy = prediction_results.boxes[larva_id].tolist()
+                        larva_confidence = prediction_results.confs[larva_id].item()
+
+                        mask = None
+                        if hasattr(prediction_results, 'masks') and prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
+                            larva_mask_object = prediction_results.masks[larva_id]
+                            mask = larva_mask_object.data.cpu().numpy().astype(np.uint8)
+
+                        length_mm, width_mm, area_sq_mm, estimated_weight_mg = \
+                            calculate_larva_metrics(bbox_xyxy, mask)
+
+                        larvae_data_to_send.append({
+                            "tray_number": tray_number,
+                            "length": round(length_mm, 2),
+                            "width": round(width_mm, 2),
+                            "area": round(area_sq_mm, 2),
+                            "weight": round(estimated_weight_mg, 2),
+                            "count": 1
+                        })
+                        print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
+                else:
+                    print(f"No larvae detected by Flat-Bug in Tray {tray_number}.")
+
+                if total_count > 0:
+                    avg_length = sum(d['length'] for d in larvae_data_to_send) / total_count
+                    avg_width = sum(d['width'] for d in larvae_data_to_send) / total_count
+                    avg_area = sum(d['area'] for d in larvae_data_to_send) / total_count
+                    avg_weight = sum(d['weight'] for d in larvae_data_to_send) / total_count
+
+                    payload = {
+                        "tray_number": tray_number,
+                        "length": round(avg_length, 2),
+                        "width": round(avg_width, 2),
+                        "area": round(avg_area, 2),
+                        "weight": round(avg_weight, 2),
+                        "count": total_count
+                    }
+
+                    print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
+                    try:
+                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
+                        print(f"Data published successfully to MQTT broker.")
+                    except Exception as mqtt_e:
+                        print(f"Error publishing data to MQTT broker: {mqtt_e}")
+                else:
+                    print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+
+            except Exception as e:
+                print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
+                import traceback
+                traceback.print_exc()
+
+            destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
+            os.rename(image_path, destination_path)
+            print(f"Moved processed image: {image_path} to {destination_path}")
+
+    if not images_found:
+        print("No new images found in the input folder.")
+
+# --- Main Execution Block ---
 if __name__ == "__main__":
-    print("Starting Digit OCR System")
-    print("=" * 50)
-    initialize_database()
-
     try:
         while True:
-            capture_and_process_image()
-            print(f"\nWaiting {CAPTURE_INTERVAL_SECONDS} seconds for next capture...")
-            time.sleep(CAPTURE_INTERVAL_SECONDS)
+            process_images_from_folder()
+            print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
+            time.sleep(PROCESS_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
-        print("\nExiting program due to user interruption")
+        print("\nExiting program due to user interruption.")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        picam2.close()
-        print("Camera resources released.")
-        print("Program terminated.")
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
+        print("Program finished.")
