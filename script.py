@@ -28,12 +28,8 @@ def on_connect(client, userdata, flags, rc, properties):
 
 # --- Configuration ---
 INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
-PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images
-
-# NEW: Directories for enhanced outputs
+PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
 OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
-OUTPUT_CROPS_DIR = "/home/pato/Documents/sdf/BSF-pi-script/larva_crops"      # Cropped images of individual larvae
-OUTPUT_METADATA_DIR = "/home/pato/Documents/sdf/BSF-pi-script/larva_metadata" # JSON metadata for detections
 
 # EasyOCR Settings
 EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
@@ -179,8 +175,6 @@ def process_images_from_folder():
     os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
     os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_CROPS_DIR, exist_ok=True)    # NEW: Create crops directory
-    os.makedirs(OUTPUT_METADATA_DIR, exist_ok=True) # NEW: Create metadata directory
 
     print(f"\n--- Checking for new images in {INPUT_IMAGE_DIR} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
 
@@ -228,7 +222,7 @@ def process_images_from_folder():
                     total_count = len(prediction_results.boxes)
                     print(f"Found {total_count} larvae in Tray {tray_number}.")
 
-                    # NEW: Use prediction_results.plot() for overview image
+                    # Use prediction_results.plot() for overview image
                     output_overview_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
                     prediction_results.plot(
                         outpath=output_overview_path,
@@ -240,24 +234,6 @@ def process_images_from_folder():
                         box_color=(255, 0, 0) # Red for bounding boxes
                     )
                     print(f"Saved image with detections to: {output_overview_path}")
-
-                    # NEW: Save cropped images of individual larvae
-                    prediction_results.save_crops(
-                        outdir=OUTPUT_CROPS_DIR,
-                        basename=base_filename,
-                        mask=True # Set to True to save masked crops (RGBA)
-                    )
-                    print(f"Saved cropped larvae images to: {OUTPUT_CROPS_DIR}")
-
-                    # NEW: Save detailed JSON metadata for all detections in this image
-                    # The identifier ensures unique metadata files if multiple images have the same base name
-                    metadata_identifier = f"{base_filename}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    prediction_results.serialize(
-                        outpath=os.path.join(OUTPUT_METADATA_DIR, f"metadata_{base_filename}"),
-                        save_json=True,
-                        identifier=metadata_identifier
-                    )
-                    print(f"Saved detection metadata to: {OUTPUT_METADATA_DIR}")
 
                     # Continue with calculating metrics for MQTT payload
                     for larva_id in range(total_count):
