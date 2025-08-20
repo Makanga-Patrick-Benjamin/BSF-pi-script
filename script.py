@@ -28,8 +28,8 @@ def on_connect(client, userdata, flags, rc, properties):
 
 # --- Configuration ---
 INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
-PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
-OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
+PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/BSF-pi-script/ocr_processed_images" # Directory to move processed images
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" 
 
 # EasyOCR Settings
 EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
@@ -61,7 +61,6 @@ except Exception as e:
 print(f"Loading Flat-Bug model from: {FLATBUG_MODEL_PATH} on device: {FLATBUG_DEVICE}...")
 try:
     flatbug_config = DEFAULT_CFG
-    # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
         device=FLATBUG_DEVICE,
@@ -122,7 +121,7 @@ def extract_text_with_easyocr(image_path):
                         integer_value = int(cleaned_text)
                         extracted_integers.append(str(integer_value))
                         all_confidences.append(float(confidence))
-                        # print(f"  Recognized integer '{integer_value}' with confidence: {float(confidence):.2f}")
+                        print(f"  Recognized integer '{integer_value}' with confidence: {float(confidence):.2f}")
                     except ValueError:
                         print(f"  Skipping non-integer segment after filtering: '{cleaned_text}' from original '{text}'")
                 else:
@@ -174,7 +173,7 @@ def process_images_from_folder():
     """
     os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
     os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True) # NEW: Ensure output directory exists
 
     print(f"\n--- Checking for new images in {INPUT_IMAGE_DIR} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
 
@@ -215,27 +214,13 @@ def process_images_from_folder():
                     single_scale=False
                 )
 
-                # Get the base name for output files (e.g., "image29")
-                base_filename = os.path.splitext(filename)[0]
-                
                 if prediction_results and hasattr(prediction_results, 'boxes') and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
                     total_count = len(prediction_results.boxes)
                     print(f"Found {total_count} larvae in Tray {tray_number}.")
 
-                    # Use prediction_results.plot() for overview image
-                    output_overview_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
-                    prediction_results.plot(
-                        outpath=output_overview_path,
-                        masks=True, # Set to True if your model predicts masks and you want to visualize them
-                        boxes=True,
-                        confidence=True,
-                        linewidth=2,
-                        contour_color=(0, 255, 0), # Green for mask contours
-                        box_color=(255, 0, 0) # Red for bounding boxes
-                    )
-                    print(f"Saved image with detections to: {output_overview_path}")
-
-                    # Continue with calculating metrics for MQTT payload
+                    # NEW: Load the original image to draw on
+                    original_image = cv2.imread(image_path)
+                    
                     for larva_id in range(total_count):
                         bbox_xyxy = prediction_results.boxes[larva_id].tolist()
                         larva_confidence = prediction_results.confs[larva_id].item()
@@ -257,6 +242,23 @@ def process_images_from_folder():
                             "count": 1
                         })
                         print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
+
+                        # NEW: Drawing the bounding box and label on the image
+                        x1, y1, x2, y2 = [int(i) for i in bbox_xyxy]
+                        label = f"{larva_confidence * 100:.2f}%"
+                        color = (0, 255, 0)  # Green color in BGR
+                        thickness = 2
+                        font_scale = 0.5
+                        font_thickness = 1
+
+                        cv2.rectangle(original_image, (x1, y1), (x2, y2), color, thickness)
+                        cv2.putText(original_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+                    
+                    # NEW: Save the image with detections to the new directory
+                    output_image_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
+                    cv2.imwrite(output_image_path, original_image)
+                    print(f"Saved image with detections to: {output_image_path}")
+
                 else:
                     print(f"No larvae detected by Flat-Bug in Tray {tray_number}.")
 
@@ -282,7 +284,7 @@ def process_images_from_folder():
                     except Exception as mqtt_e:
                         print(f"Error publishing data to MQTT broker: {mqtt_e}")
                 else:
-                    print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+                    print(f"No larvae detected for Tray {tray_number}. No data published to MQTT.")
 
             except Exception as e:
                 print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
