@@ -2,13 +2,14 @@ import time
 import cv2
 import os
 import easyocr
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
 import requests
 import base64
 import traceback # Added for better error logging
+import sys
 
 # --- Flat-Bug Model Imports ---
 from flat_bug.predictor import Predictor
@@ -21,7 +22,7 @@ MQTT_PORT = 1883
 MQTT_TOPIC = "bsf_monitor/larvae_data"
                                       
 # --- Flask Server Configuration ---
-FLASK_SERVER_URL = "http://10.126.3.62:8000"  # Change this to your Flask server's URL if it's not local
+FLASK_SERVER_URL = "https://soldierfly-fly-monitor.onrender.com"  # Change this to your Flask server's URL if it's not local
 
 # --- Callbacks for MQTT Client ---
 def on_connect(client, userdata, flags, rc, properties):

@@ -14,18 +14,27 @@ A Bash script designed to simplify the installation and configuration of the BSF
 - Internet connection
 
 ## Installation
-1. Clone the repository:
-   ```bash
+1. **Clone the repository**:
+```bash
    git clone https://github.com/Makanga-Patrick-Benjamin/BSF-pi-script.git
    cd BSF-pi-script
-2. create a virtual environment:
-   ```bash
-   python -m venv scriptenv
-   source scriptenv/bin/activate
+```
+
+2. **create a virtual environment**:
+```bash
+   python3 -m venv myenv #for python venv environment
+   source myenv/bin/activate
+```
+```bash
+   conda create --name myenv #for conda environment
+   conda activate "myenv"
+```
 4. Install Dependencies:
    Navigate into the cloned directory. If your project uses Python dependencies, they should be listed in a requirements.txt file. Install them using pip:
-   ```bash
-   pip3 install -r requirements.txt
+```bash
+   pip install -r requirements.txt
+```
 5.  Execute the Script:
-   ```bash
+```bash
    python3 imageread.py
+```
