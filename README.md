@@ -38,3 +38,9 @@ A Bash script designed to simplify the installation and configuration of the BSF
 ```bash
    python3 imageread.py
 ```
+## view content on webdash board
+[https://soldierfly-fly-monitor.onrender.com](https://soldierfly-fly-monitor.onrender.com) *Dashboard layout*
+
+**Default credentials:**
+- **user name:** admin
+- **password:** admin123
