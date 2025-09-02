@@ -2,27 +2,26 @@ import time
 import cv2
 import os
 import easyocr
-from datetime import datetime, timezone
+from datetime import datetime
 import numpy as np
 import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
 import requests
-import base64
-import traceback # Added for better error logging
-import sys
 
 # --- Flat-Bug Model Imports ---
 from flat_bug.predictor import Predictor
-from flat_bug.config import DEFAULT_CFG, read_cfg
-from flat_bug import logger as flatbug_logger, set_log_level
+from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
+from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
+
+# --- Web API Configuration ---
+# Set the URL for your web application's API endpoint
+WEB_APP_API_URL = "http://192.168.0.3:8000/api/sensor"
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT = 1883
-MQTT_TOPIC = "bsf_monitor/larvae_data"
-                                      
-# --- Flask Server Configuration ---
-FLASK_SERVER_URL = "https://soldierfly-fly-monitor.onrender.com"  # Change this to your Flask server's URL if it's not local
+MQTT_PORT = 1883 # Standard unencrypted MQTT port
+MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique for your project!
+                                      # E.g., "your_username/bsf_monitor/larvae_data"
 
 # --- Callbacks for MQTT Client ---
 def on_connect(client, userdata, flags, rc, properties):
@@ -33,22 +32,22 @@ def on_connect(client, userdata, flags, rc, properties):
         print(f"Failed to connect, return code {rc}\n")
 
 # --- Configuration ---
-INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
-PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images"
-OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images"
+INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
+PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
 
 # EasyOCR Settings
-EASYOCR_LANGUAGES = ['en']
-EASYOCR_ALLOWLIST = '0123456789'
+EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
+EASYOCR_ALLOWLIST = '0123456789' # Only allow digits for tray number recognition
 EASYOCR_BLOCKLIST = ''
 
 # Script Timing
-PROCESS_INTERVAL_SECONDS = 10
+PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/best.pt" # IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
-FLATBUG_DEVICE = "cpu"
-FLATBUG_DTYPE = "float32"
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
+FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
+FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 
 # Calibration Factor (pixels per millimeter)
 PIXELS_PER_MM = 20.0
@@ -67,6 +66,7 @@ except Exception as e:
 print(f"Loading Flat-Bug model from: {FLATBUG_MODEL_PATH} on device: {FLATBUG_DEVICE}...")
 try:
     flatbug_config = DEFAULT_CFG
+    # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
         device=FLATBUG_DEVICE,
@@ -117,7 +117,6 @@ def extract_text_with_easyocr(image_path):
     all_confidences = []
 
     try:
-        # Use a simplified approach without the `reader` variable which is initialized in the main body
         results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST)
 
         for (bbox, text, confidence) in results:
@@ -128,6 +127,7 @@ def extract_text_with_easyocr(image_path):
                         integer_value = int(cleaned_text)
                         extracted_integers.append(str(integer_value))
                         all_confidences.append(float(confidence))
+                        # print(f"  Recognized integer '{integer_value}' with confidence: {float(confidence):.2f}")
                     except ValueError:
                         print(f"  Skipping non-integer segment after filtering: '{cleaned_text}' from original '{text}'")
                 else:
@@ -158,7 +158,6 @@ def calculate_larva_metrics(bbox, mask=None):
 
     area_px = 0
     if mask is not None:
-        # Assuming mask is a numpy array of 0s and 1s
         area_px = np.sum(mask)
     else:
         area_px = length_px * width_px
@@ -172,49 +171,11 @@ def calculate_larva_metrics(bbox, mask=None):
 
     return length_mm, width_mm, area_sq_mm, estimated_weight_mg
 
-# --- Upload Function ---
-def upload_image_to_server(image_path, tray_number, count, avg_length, avg_weight, bounding_boxes, masks):
-    """
-    Uploads a processed image and its data to the Flask server.
-    
-    Args:
-        image_path (str): The local path to the image file to be uploaded.
-        tray_number (int): The detected tray number.
-        count (int): The number of larvae detected.
-        avg_length (float): The average length of larvae.
-        avg_weight (float): The average weight of larvae.
-        bounding_boxes (list): List of detected bounding boxes.
-        masks (list): List of detected masks (converted to lists).
-    """
-    try:
-        with open(image_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-
-        payload = {
-            "image_data": encoded_string,
-            "tray_number": tray_number,
-            "count": count,
-            "avg_length": avg_length,
-            "avg_weight": avg_weight,
-            "bounding_boxes": json.dumps(bounding_boxes),
-            "masks": json.dumps(masks),
-        }
-
-        response = requests.post(f"{FLASK_SERVER_URL}/api/upload", json=payload)
-        
-        if response.status_code == 200:
-            print(f"Successfully uploaded image {os.path.basename(image_path)} to server.")
-        else:
-            print(f"Failed to upload image. Server returned status code: {response.status_code}, {response.text}")
-    except Exception as e:
-        print(f"An error occurred during image upload: {e}")
-        traceback.print_exc()
-
 # --- Main Processing Loop ---
 def process_images_from_folder():
     """
     Monitors the input directory for new images, processes them,
-    and publishes aggregated data to MQTT and the Flask server.
+    and publishes aggregated data to MQTT.
     """
     os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
     os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
@@ -250,10 +211,8 @@ def process_images_from_folder():
             print(f"Running Flat-Bug inference on {image_path}...")
             larvae_data_to_send = []
             total_count = 0
-            
+
             try:
-                # IMPORTANT FIX: The original code had two separate prediction blocks.
-                # This has been consolidated into a single, correct block.
                 prediction_results = flatbug_predictor.pyramid_predictions(
                     image_path,
                     scale_increment=2/3,
@@ -261,75 +220,87 @@ def process_images_from_folder():
                     single_scale=False
                 )
 
-                if prediction_results and hasattr(prediction_results, 'boxes') and len(prediction_results.boxes) > 0:
+                # Get the base name for output files (e.g., "image29")
+                base_filename = os.path.splitext(filename)[0]
+                
+                if prediction_results and hasattr(prediction_results, 'boxes') and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
                     total_count = len(prediction_results.boxes)
                     print(f"Found {total_count} larvae in Tray {tray_number}.")
 
-                    # Create the output image with detections and save it
+                    # Use prediction_results.plot() for overview image
                     output_overview_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
                     prediction_results.plot(
                         outpath=output_overview_path,
-                        masks=True,
+                        masks=True, # Set to True if your model predicts masks and you want to visualize them
                         boxes=True,
                         confidence=True,
                         linewidth=2,
-                        contour_color=(0, 255, 0),
-                        box_color=(255, 0, 0)
+                        contour_color=(0, 255, 0), # Green for mask contours
+                        box_color=(255, 0, 0) # Red for bounding boxes
                     )
                     print(f"Saved image with detections to: {output_overview_path}")
 
-                    # Aggregate all bounding boxes and masks for the payload
-                    bounding_boxes_payload = [box.tolist() for box in prediction_results.boxes]
-                    masks_payload = [mask.data.cpu().numpy().tolist() for mask in prediction_results.masks]
-
-                    # Calculate individual larva metrics and store them
+                    # Continue with calculating metrics for MQTT payload
                     for larva_id in range(total_count):
                         bbox_xyxy = prediction_results.boxes[larva_id].tolist()
                         larva_confidence = prediction_results.confs[larva_id].item()
-                        mask_data = prediction_results.masks[larva_id].data.cpu().numpy().astype(np.uint8)
+
+                        mask = None
+                        if hasattr(prediction_results, 'masks') and prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
+                            larva_mask_object = prediction_results.masks[larva_id]
+                            mask = larva_mask_object.data.cpu().numpy().astype(np.uint8)
 
                         length_mm, width_mm, area_sq_mm, estimated_weight_mg = \
-                            calculate_larva_metrics(bbox_xyxy, mask_data)
+                            calculate_larva_metrics(bbox_xyxy, mask)
 
                         larvae_data_to_send.append({
-                            "length": length_mm,
-                            "weight": estimated_weight_mg
+                            "tray_number": tray_number,
+                            "length": round(length_mm, 2),
+                            "width": round(width_mm, 2),
+                            "area": round(area_sq_mm, 2),
+                            "weight": round(estimated_weight_mg, 2),
+                            "count": 1
                         })
-                        print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
-                    
-                    # Calculate aggregate metrics for the entire tray
-                    avg_length = sum(d['length'] for d in larvae_data_to_send) / total_count
-                    avg_weight = sum(d['weight'] for d in larvae_data_to_send) / total_count
-
-                    # Publish aggregated data to MQTT
-                    mqtt_payload = {
-                        "tray_number": tray_number,
-                        "avg_length": round(avg_length, 2),
-                        "avg_weight": round(avg_weight, 2),
-                        "count": total_count,
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-                    print(f"Published data for Tray {tray_number} to MQTT.")
-                    mqtt_client.publish(MQTT_TOPIC, json.dumps(mqtt_payload), qos=1)
-
-                    # Upload the detected image and data to the Flask server
-                    upload_image_to_server(
-                        image_path=output_overview_path, # Use the image with detections
-                        tray_number=tray_number,
-                        count=total_count,
-                        avg_length=round(avg_length, 2),
-                        avg_weight=round(avg_weight, 2),
-                        bounding_boxes=bounding_boxes_payload,
-                        masks=masks_payload
-                    )
+                        print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
                 else:
                     print(f"No larvae detected by Flat-Bug in Tray {tray_number}.")
 
+                if total_count > 0:
+                    avg_length = sum(d['length'] for d in larvae_data_to_send) / total_count
+                    avg_width = sum(d['width'] for d in larvae_data_to_send) / total_count
+                    avg_area = sum(d['area'] for d in larvae_data_to_send) / total_count
+                    avg_weight = sum(d['weight'] for d in larvae_data_to_send) / total_count
+
+                    payload = {
+                        "tray_number": tray_number,
+                        "length": round(avg_length, 2),
+                        "width": round(avg_width, 2),
+                        "area": round(avg_area, 2),
+                        "weight": round(avg_weight, 2),
+                        "count": total_count
+                    }
+
+                    print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
+                    try:
+                        # Publish to MQTT
+                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
+                        print(f"Data published successfully to MQTT broker.")
+                        # Upload to web API
+                        response = requests.post(WEB_APP_API_URL, json=payload)
+                        response.raise_for_status()  # This will raise an HTTPError if the status is 4xx or 5xx
+
+                        print(f"Data uploaded successfully to API. Status code: {response.status_code}")
+                        print(f"Response from API: {response.json()}")
+                    except requests.exceptions.RequestException as api_e:
+                        print(f"Error uploading data to web API: {api_e}")
+                else:
+                    print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+
             except Exception as e:
                 print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
+                import traceback
                 traceback.print_exc()
 
-            # Move the original image to the processed directory
             destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
             os.rename(image_path, destination_path)
             print(f"Moved processed image: {image_path} to {destination_path}")
@@ -349,6 +320,7 @@ if __name__ == "__main__":
         print("\nExiting program due to user interruption.")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
+        import traceback
         traceback.print_exc()
     finally:
         mqtt_client.loop_stop()
