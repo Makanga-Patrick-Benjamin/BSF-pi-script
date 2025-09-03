@@ -55,7 +55,7 @@ PIXELS_PER_MM = 20.0
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, recog_network='latin_g2', gpu=False)
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
@@ -282,10 +282,10 @@ def process_images_from_folder():
 
                     print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
                     try:
-                        # Publish to MQTT
-                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                        print(f"Data published successfully to MQTT broker.")
-                        # Upload to web API
+                        # # Publish to MQTT
+                        # mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
+                        # print(f"Data published successfully to MQTT broker.")
+                        # # Upload to web API
                         response = requests.post(WEB_APP_API_URL, json=payload)
                         response.raise_for_status()  # This will raise an HTTPError if the status is 4xx or 5xx
 
