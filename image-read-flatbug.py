@@ -40,7 +40,7 @@ EASYOCR_BLOCKLIST = ''
 PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8s.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
 FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 

@@ -15,7 +15,7 @@ from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's in
 
 # --- Web API Configuration ---
 # Set the URL for your web application's API endpoint
-WEB_APP_API_URL = "http://192.168.0.3:8000/api/sensor"
+WEB_APP_API_URL = "https://soldierfly-fly-monitor.onrender.com"
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
@@ -45,7 +45,7 @@ EASYOCR_BLOCKLIST = ''
 PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8s.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
 FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 
