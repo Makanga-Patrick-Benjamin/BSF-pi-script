@@ -15,8 +15,8 @@ from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's in
 
 # --- Web API Configuration ---
 # Set the URL for your web application's API endpoint
-# WEB_APP_API_URL = "https://soldierfly-fly-monitor.onrender.com/api/larvae_data" # <--- IMPORTANT: CHANGE TO YOUR WEB APP'S API URL
-WEB_APP_API_URL = "http://192.168.162.253:8000/api/larvae_data" # Local testing URL
+WEB_APP_API_URL = "https://soldierfly-fly-monitor.onrender.com/api/larvae_data" # <--- IMPORTANT: CHANGE TO YOUR WEB APP'S API URL
+#B_APP_API_URL = "http://192.168.162.253:8000/api/larvae_data" # Local testing URL
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
