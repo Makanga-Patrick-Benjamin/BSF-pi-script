@@ -50,7 +50,7 @@ PIXELS_PER_MM = 20.0
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, verbose=False, allowlist=EASYOCR_ALLOWLIST, blocklist=EASYOCR_BLOCKLIST)
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, verbose=False)
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
@@ -114,7 +114,8 @@ def extract_text_with_easyocr(image_path):
     all_confidences = []
 
     try:
-        results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST)
+        results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST, blocklist=EASYOCR_BLOCKLIST)
+
 
         for (bbox, text, confidence) in results:
             if text.strip():
