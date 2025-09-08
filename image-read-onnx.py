@@ -241,4 +241,5 @@ if __name__ == "__main__":
     finally:
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
+
         print("Program finished.")
