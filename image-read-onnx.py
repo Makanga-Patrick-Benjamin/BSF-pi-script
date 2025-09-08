@@ -7,6 +7,8 @@ import numpy as np
 import paho.mqtt.client as mqtt
 import json
 import onnxruntime as ort
+import glob
+from pathlib import Path
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
@@ -31,218 +33,270 @@ MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx"
 
 PROCESS_INTERVAL_SECONDS = 5  # Check for new images every 5 seconds
 
-# --- Class for ONNX Inference ---
+CONF_THRESHOLD = 0.5  # Confidence threshold for object detection
+EASYOCR_LANGUAGES = ['en']
+EASYOCR_RECOGNIZE_CONF = 0.5
+
 class ONNXPredictor:
-    """
-    Handles ONNX model loading and inference.
-    NOTE: The pre-processing and post-processing logic MUST be customized
-    to match the specific ONNX model's input and output requirements.
-    """
+    """Handles inference with an ONNX model."""
     def __init__(self, model_path):
-        self.session = ort.InferenceSession(model_path)
+        self.model_path = model_path
+        self.session = None
+        self._load_model()
         self.input_name = self.session.get_inputs()[0].name
         self.output_names = [output.name for output in self.session.get_outputs()]
 
-    def run_inference(self, image):
-        """
-        Processes the image and runs inference.
-        You MUST fill in this part with your model's specific logic.
+    def _load_model(self):
+        """Loads the ONNX model and sets up the inference session."""
+        try:
+            self.session = ort.InferenceSession(str(self.model_path), providers=['CPUExecutionProvider'])
+            print("ONNX model loaded successfully.")
+            print("Using CPU. Note: This module is much faster with a GPU.")
+        except Exception as e:
+            print(f"Error loading ONNX model: {e}")
+            raise
 
+    def run_inference(self, image_path):
+        """
+        Runs inference on a single image and returns detected objects.
+        
         Args:
-            image (np.ndarray): The input image (e.g., loaded with cv2.imread).
+            image_path (Path): Path to the image file.
 
         Returns:
-            A tuple of (boxes, confidence_scores, masks).
-            The format of these depends entirely on your model's output.
+            list: A list of detected objects (larvae), each a dictionary with keys
+                  'bounding_box' and 'confidence'.
         """
-        # Placeholder for pre-processing logic
-        # Example for a YOLO-like model (you will need to adjust this)
-        input_shape = self.session.get_inputs()[0].shape[2:]
-        input_tensor = cv2.resize(image, tuple(input_shape))
-        input_tensor = input_tensor.transpose((2, 0, 1))
-        input_tensor = np.expand_dims(input_tensor, axis=0)
-        input_tensor = input_tensor.astype('float32') / 255.0
-
-        # Run inference
-        raw_outputs = self.session.run(self.output_names, {self.input_name: input_tensor})
-
-        # Placeholder for post-processing logic
-        # You must implement the code to parse raw_outputs and convert them
-        # into bounding boxes, confidence scores, and masks.
-        # This will be very specific to your model.
-        # Example:
-        # boxes, confs, masks = self.post_process(raw_outputs, image.shape)
-        # For now, we return empty lists to allow the script to run without crashing.
-        return [], [], []
-
-def create_directory_if_not_exists(directory):
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-        print(f"Created directory: {directory}")
-
-# --- Helper Functions ---
-def calculate_area(mask):
-    return np.sum(mask > 0)
-
-def calculate_approximate_weight(area_pixels, reference_weight=0.04):
-    """
-    Calculates the approximate weight of a larva based on its area in pixels.
-    This is an arbitrary function based on the original script's logic.
-    """
-    # Adjust this based on your camera calibration and object properties.
-    PIXELS_PER_MM = 10  # Example value.
-    area_mm2 = area_pixels / (PIXELS_PER_MM ** 2)
-    return area_mm2 * reference_weight
-
-def process_images_from_folder():
-    """
-    Main function to process images from the input folder.
-    """
-    print(f"Scanning for new images in: {INPUT_IMAGE_DIR}")
-    images_found = False
-
-    # Check if directories exist and create them if they don't
-    create_directory_if_not_exists(INPUT_IMAGE_DIR)
-    create_directory_if_not_exists(PROCESSED_IMAGE_DIR)
-    create_directory_if_not_exists(OUTPUT_DETECTION_DIR)
-
-    # Load ONNX model once
-    try:
-        predictor = ONNXPredictor(MODEL_PATH)
-        print("ONNX model loaded successfully.")
-    except Exception as e:
-        print(f"Error loading ONNX model: {e}")
-        return
-
-    # Initialize EasyOCR reader
-    try:
-        reader = easyocr.Reader(['en'], gpu=False)
-        print("EasyOCR reader initialized.")
-    except Exception as e:
-        print(f"Error initializing EasyOCR reader: {e}")
-        return
-
-    for filename in os.listdir(INPUT_IMAGE_DIR):
-        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp')):
-            images_found = True
-            image_path = os.path.join(INPUT_IMAGE_DIR, filename)
-            print(f"Processing image: {image_path}")
-            
-            # Read the image
-            image = cv2.imread(image_path)
+        try:
+            # Load and preprocess the image
+            image = cv2.imread(str(image_path))
             if image is None:
-                print(f"Error: Could not read image {image_path}. Skipping.")
-                continue
+                raise FileNotFoundError(f"Image not found at {image_path}")
 
-            # Read the tray number from the image using EasyOCR
-            tray_number = "UNKNOWN"
-            try:
-                # Assuming the tray number is in a fixed region
-                roi_image = image[100:200, 100:400]
-                result_easyocr = reader.readtext(roi_image, detail=0)
-                if result_easyocr:
-                    tray_number = " ".join(result_easyocr)
-                    print(f"Detected Tray Number: {tray_number}")
-            except Exception as e:
-                print(f"EasyOCR Error: {e}")
-
-            # --- Larvae detection and analysis with ONNX ---
-            larvae_data = []
-            annotated_image = image.copy()
+            # --- MODEL PRE-PROCESSING: THIS IS A PLACEHOLDER ---
+            # You must adapt this section to match your model's specific requirements.
+            # Common steps include resizing, normalizing, and changing channel order.
+            # The example below assumes a common YOLO-like model input.
             
-            try:
-                # You must customize the run_inference method in ONNXPredictor
-                # to get meaningful boxes, confs, and masks.
-                boxes, confs, masks = predictor.run_inference(image)
-                
-                if boxes:
-                    # Logic from the original script to iterate through results
-                    for i in range(len(boxes)):
-                        box = boxes[i]
-                        conf = confs[i]
-                        mask = masks[i]
+            # Example for a YOLOv8-like model:
+            # 1. Resize image to a fixed size (e.g., 640x640)
+            input_shape = self.session.get_inputs()[0].shape
+            input_width, input_height = input_shape[3], input_shape[2]
+            
+            img_resized = cv2.resize(image, (input_width, input_height))
 
-                        # Calculate properties from the mask
-                        larva_area = calculate_area(mask)
-                        larva_weight = calculate_approximate_weight(larva_area)
-                        
-                        # Find bounding box for the mask
-                        x, y, w, h = cv2.boundingRect(mask.astype(np.uint8))
-                        
-                        # Append data to the list
-                        larvae_data.append({
-                            "id": i,
-                            "bbox": [int(x), int(y), int(w), int(h)],
-                            "confidence": float(conf),
-                            "area_pixels": float(larva_area),
-                            "weight_g": float(larva_weight)
-                        })
+            # 2. Normalize and transpose for ONNX model input
+            input_data = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+            input_data = input_data.transpose(2, 0, 1)  # Change to C, H, W
+            input_data = input_data.astype('float32') / 255.0  # Normalize to [0, 1]
+            input_data = input_data[None, :, :, :]  # Add batch dimension
 
-                        # Draw bounding box and confidence on the image
-                        cv2.rectangle(annotated_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                        cv2.putText(annotated_image, f"{conf:.2f}", (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                                    
-                        # Create and apply the color mask
-                        color_mask = np.zeros_like(image, dtype=np.uint8)
-                        color_mask[mask > 0] = (255, 0, 0)
-                        annotated_image = cv2.addWeighted(annotated_image, 1, color_mask, 0.5, 0)
+            # Run inference
+            outputs = self.session.run(self.output_names, {self.input_name: input_data})
+            
+            # --- MODEL POST-PROCESSING: THIS IS A PLACEHOLDER ---
+            # You must adapt this section to match your model's specific output format.
+            # The raw output from the model needs to be parsed into meaningful data.
+            
+            detected_larvae = []
+            
+            # Example for a YOLOv8-like model with a single output tensor:
+            # The raw output needs to be transposed and filtered.
+            predictions = outputs[0].transpose()
+            
+            # Filtering based on confidence and non-maximum suppression (NMS)
+            for prediction in predictions:
+                scores = prediction[4:]
+                class_id = scores.argmax()
+                confidence = scores[class_id]
 
-                    print(f"Detected {len(larvae_data)} larvae.")
+                if confidence > CONF_THRESHOLD:
+                    # Bounding box coordinates
+                    x_center, y_center, width, height = prediction[:4]
                     
-                    # Save the annotated image
-                    annotated_filename = f"detected_{os.path.basename(filename)}"
-                    annotated_path = os.path.join(OUTPUT_DETECTION_DIR, annotated_filename)
-                    cv2.imwrite(annotated_path, annotated_image)
-                    print(f"Saved detected image to {annotated_path}")
+                    # Convert to original image coordinates
+                    original_height, original_width = image.shape[:2]
+                    x_factor = original_width / input_width
+                    y_factor = original_height / input_height
 
-                    # Publish data to MQTT
-                    payload = {
-                        "tray_id": tray_number,
-                        "timestamp": datetime.now().isoformat(),
-                        "total_larvae_count": len(larvae_data),
-                        "larvae_details": larvae_data
-                    }
-                    try:
-                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                        print("Data published successfully to MQTT broker.")
-                    except Exception as mqtt_e:
-                        print(f"Error publishing data to MQTT broker: {mqtt_e}")
-                else:
-                    print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+                    xmin = int((x_center - width / 2) * x_factor)
+                    ymin = int((y_center - height / 2) * y_factor)
+                    xmax = int((x_center + width / 2) * x_factor)
+                    ymax = int((y_center + height / 2) * y_factor)
+
+                    detected_larvae.append({
+                        "class_id": int(class_id),
+                        "confidence": float(confidence),
+                        "bounding_box": [xmin, ymin, xmax, ymax]
+                    })
             
-            except Exception as e:
-                print(f"Error during ONNX inference or data aggregation for {image_path}: {e}")
-                import traceback
-                traceback.print_exc()
+            # Apply Non-Maximum Suppression (NMS) to remove duplicate boxes
+            # This is a critical step, but its implementation depends on the library used.
+            # You may need to use a library like `torchvision.ops.nms` or a custom function.
+            
+            return detected_larvae
 
-            destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
-            os.rename(image_path, destination_path)
-            print(f"Moved processed image: {image_path} to {destination_path}")
+        except Exception as e:
+            print(f"Error during ONNX inference for {image_path}: {e}")
+            return []
 
-    if not images_found:
-        print("No new images found in the input folder.")
+class EasyOCRReader:
+    """Handles text recognition with EasyOCR."""
+    def __init__(self, languages):
+        try:
+            self.reader = easyocr.Reader(languages)
+            print("EasyOCR reader initialized.")
+        except Exception as e:
+            print(f"Error initializing EasyOCR: {e}")
+            raise
 
-# --- Main Execution Block ---
-if __name__ == "__main__":
-    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    mqtt_client.on_connect = on_connect
+    def read_tray_number(self, image_path):
+        """
+        Reads the tray number from an image.
+
+        Args:
+            image_path (Path): Path to the image file.
+
+        Returns:
+            str: The detected tray number or "UNKNOWN" if not found.
+        """
+        try:
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise FileNotFoundError(f"Image not found at {image_path}")
+
+            # Crop the top-right corner where the tray number is located
+            h, w, _ = image.shape
+            crop_img = image[0:int(h * 0.2), int(w * 0.7):w]
+
+            # Perform OCR on the cropped image
+            results = self.reader.readtext(crop_img)
+
+            for (bbox, text, prob) in results:
+                # Filter for results with high confidence that contain only digits
+                if prob > EASYOCR_RECOGNIZE_CONF and text.isdigit():
+                    return text.strip()
+            
+            return "UNKNOWN"
+
+        except Exception as e:
+            print(f"Error reading tray number from {image_path}: {e}")
+            return "UNKNOWN"
+
+class MQTTPublisher:
+    """Manages MQTT connection and publishing."""
+    def __init__(self, broker, port, topic):
+        self.broker = broker
+        self.port = port
+        self.topic = topic
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_disconnect = self.on_disconnect
+
+    def on_connect(self, client, userdata, flags, rc):
+        """Callback for when the client connects to the broker."""
+        if rc == 0:
+            print("Connected to MQTT Broker!")
+        else:
+            print(f"Failed to connect, return code {rc}\n")
+
+    def on_disconnect(self, client, userdata, rc):
+        """Callback for when the client disconnects."""
+        if rc != 0:
+            print(f"Unexpected disconnection. Reconnecting...")
+
+    def connect_and_loop(self):
+        """Starts the MQTT client loop."""
+        try:
+            self.client.connect(self.broker, self.port, 60)
+            self.client.loop_start()
+        except Exception as e:
+            print(f"Error connecting to MQTT Broker: {e}")
+            raise
+
+    def publish_data(self, data):
+        """Publishes data to the specified MQTT topic."""
+        try:
+            self.client.publish(self.topic, json.dumps(data), qos=1)
+            print("Data published successfully.")
+        except Exception as e:
+            print(f"Error publishing data: {e}")
+
+    def disconnect(self):
+        """Disconnects the MQTT client."""
+        self.client.loop_stop()
+        self.client.disconnect()
+
+def process_images():
+    """Main function to process images in a directory."""
     try:
-        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        mqtt_client.loop_start()
+        # Ensure processed images directory exists
+        PROCESSED_IMG_DIR.mkdir(exist_ok=True)
+        
+        # Initialize components
+        onnx_predictor = ONNXPredictor(MODEL_PATH)
+        ocr_reader = EasyOCRReader(EASYOCR_LANGUAGES)
+        mqtt_publisher = MQTTPublisher(MQTT_BROKER, MQTT_PORT, TOPIC)
+        mqtt_publisher.connect_and_loop()
 
         while True:
-            process_images_from_folder()
-            print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
-            time.sleep(PROCESS_INTERVAL_SECONDS)
+            print(f"Scanning for new images in: {IMG_DIR}")
+            image_files = glob.glob(f"{IMG_DIR}/*.jpg")
+            
+            if not image_files:
+                print("No new images found. Waiting...")
+                time.sleep(10)
+                continue
+
+            for image_path_str in image_files:
+                image_path = Path(image_path_str)
+                print(f"Processing image: {image_path}")
+
+                try:
+                    # 1. Analyze for larvae
+                    larvae_detections = onnx_predictor.run_inference(image_path)
+                    
+                    # 2. Extract tray number
+                    tray_number = ocr_reader.read_tray_number(image_path)
+
+                    larvae_count = len(larvae_detections)
+                    
+                    if larvae_count > 0:
+                        payload = {
+                            "tray_number": tray_number,
+                            "larvae_count": larvae_count,
+                            "detections": [
+                                {
+                                    "bounding_box": det["bounding_box"],
+                                    "confidence": det["confidence"]
+                                } for det in larvae_detections
+                            ],
+                            "timestamp": time.time()
+                        }
+                        mqtt_publisher.publish_data(payload)
+                        print(f"Data published for Tray {tray_number} ({larvae_count} larvae detected).")
+                    else:
+                        print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+                    
+                    # Move the processed image
+                    new_path = PROCESSED_IMG_DIR / image_path.name
+                    image_path.rename(new_path)
+                    print(f"Moved processed image: {image_path} to {new_path}")
+                
+                except Exception as e:
+                    print(f"Failed to process image {image_path}. Error: {e}")
+            
+            time.sleep(5)  # Wait before checking for new images again
 
     except KeyboardInterrupt:
-        print("\nExiting program due to user interruption.")
+        print("Process interrupted by user. Shutting down.")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"An unexpected error occurred in the main loop: {e}")
     finally:
-        mqtt_client.loop_stop()
-        mqtt_client.disconnect()
-        print("Program finished.")
+        if 'mqtt_publisher' in locals():
+            mqtt_publisher.disconnect()
+            print("Disconnected from MQTT Broker.")
+        print("Script terminated.")
+
+if __name__ == "__main__":
+    process_images()
