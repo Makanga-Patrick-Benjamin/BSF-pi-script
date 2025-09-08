@@ -8,10 +8,9 @@ import paho.mqtt.client as mqtt
 import json
 import onnxruntime as ort
 
-# --- ONNX Runtime Model Configuration ---
-# You need to have your ONNX model file and a labels file for class names.
-ONNX_MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx"
-# LABELS_PATH = "path/to/your/labels.txt" # Uncomment and provide if you have a labels file.
+# --- ONNX Runtime Model Imports ---
+# The logic for pre/post-processing depends on your model's architecture.
+# We'll define a class to handle this.
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
@@ -27,147 +26,195 @@ def on_connect(client, userdata, flags, rc, properties):
         print(f"Failed to connect, return code {rc}\n")
 
 # --- Configuration ---
-INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img"
-PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images"
-OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_larvae" # Directory to save images with detections drawn on them.
-PROCESS_INTERVAL_SECONDS = 5 # How often to check for new images.
+# Set directories to be relative to the script's location
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_IMAGE_DIR = os.path.join(SCRIPT_DIR, "img")
+PROCESSED_IMAGE_DIR = os.path.join(SCRIPT_DIR, "processed_images")
+OUTPUT_DETECTION_DIR = os.path.join(SCRIPT_DIR, "detected_images")
+MODEL_PATH = os.path.join(SCRIPT_DIR, "bestmodel.onnx")
 
-# --- Initialize MQTT Client ---
-mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-mqtt_client.on_connect = on_connect
-mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-mqtt_client.loop_start()
+PROCESS_INTERVAL_SECONDS = 5  # Check for new images every 5 seconds
 
-# --- Initialize ONNX Runtime Session and Model ---
-try:
-    # Create an InferenceSession with the ONNX model.
-    # The `providers` argument can be used to specify the hardware (e.g., 'CPUExecutionProvider').
-    session = ort.InferenceSession(ONNX_MODEL_PATH, providers=['CPUExecutionProvider'])
-    
-    # Get the input name of the model.
-    input_name = session.get_inputs()[0].name
-    
-    print(f"ONNX model loaded successfully from {ONNX_MODEL_PATH}")
-
-    # You may also want to get the model's expected input shape and output names here.
-    input_shape = session.get_inputs()[0].shape
-    output_names = [output.name for output in session.get_outputs()]
-    print(f"Model input shape: {input_shape}")
-    print(f"Model output names: {output_names}")
-
-    # Optional: Load labels if you have a labels file.
-    # with open(LABELS_PATH, 'r') as f:
-    #     labels = [line.strip() for line in f.readlines()]
-    # print(f"Labels loaded: {labels}")
-
-except Exception as e:
-    print(f"Error initializing ONNX Runtime session: {e}")
-    exit()
-
-def preprocess_image(image):
+# --- Class for ONNX Inference ---
+class ONNXPredictor:
     """
-    Preprocesses the image for the ONNX model.
-    This function should be customized based on your specific model's requirements.
-    A common format is resizing to a fixed size, transposing to C,H,W format,
-    and normalizing pixel values.
+    Handles ONNX model loading and inference.
+    NOTE: The pre-processing and post-processing logic MUST be customized
+    to match the specific ONNX model's input and output requirements.
     """
-    # Resize the image to the model's expected input size
-    # This example assumes the model expects a 224x224 image.
-    model_input_size = (input_shape[3], input_shape[2]) # (width, height)
-    resized_image = cv2.resize(image, model_input_size)
-    
-    # Change HxWxC to CxHxW format (transpose the channels).
-    resized_image = np.transpose(resized_image, (2, 0, 1))
+    def __init__(self, model_path):
+        self.session = ort.InferenceSession(model_path)
+        self.input_name = self.session.get_inputs()[0].name
+        self.output_names = [output.name for output in self.session.get_outputs()]
 
-    # Add a batch dimension (e.g., from (3, 224, 224) to (1, 3, 224, 224)).
-    input_tensor = resized_image[np.newaxis, :, :, :]
+    def run_inference(self, image):
+        """
+        Processes the image and runs inference.
+        You MUST fill in this part with your model's specific logic.
 
-    # Normalize the image (e.g., by dividing by 255.0).
-    input_tensor = input_tensor.astype(np.float32) / 255.0
+        Args:
+            image (np.ndarray): The input image (e.g., loaded with cv2.imread).
 
-    return input_tensor
+        Returns:
+            A tuple of (boxes, confidence_scores, masks).
+            The format of these depends entirely on your model's output.
+        """
+        # Placeholder for pre-processing logic
+        # Example for a YOLO-like model (you will need to adjust this)
+        input_shape = self.session.get_inputs()[0].shape[2:]
+        input_tensor = cv2.resize(image, tuple(input_shape))
+        input_tensor = input_tensor.transpose((2, 0, 1))
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        input_tensor = input_tensor.astype('float32') / 255.0
+
+        # Run inference
+        raw_outputs = self.session.run(self.output_names, {self.input_name: input_tensor})
+
+        # Placeholder for post-processing logic
+        # You must implement the code to parse raw_outputs and convert them
+        # into bounding boxes, confidence scores, and masks.
+        # This will be very specific to your model.
+        # Example:
+        # boxes, confs, masks = self.post_process(raw_outputs, image.shape)
+        # For now, we return empty lists to allow the script to run without crashing.
+        return [], [], []
+
+def create_directory_if_not_exists(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+        print(f"Created directory: {directory}")
+
+# --- Helper Functions ---
+def calculate_area(mask):
+    return np.sum(mask > 0)
+
+def calculate_approximate_weight(area_pixels, reference_weight=0.04):
+    """
+    Calculates the approximate weight of a larva based on its area in pixels.
+    This is an arbitrary function based on the original script's logic.
+    """
+    # Adjust this based on your camera calibration and object properties.
+    PIXELS_PER_MM = 10  # Example value.
+    area_mm2 = area_pixels / (PIXELS_PER_MM ** 2)
+    return area_mm2 * reference_weight
 
 def process_images_from_folder():
     """
-    Checks for new images in the input folder and processes them.
+    Main function to process images from the input folder.
     """
+    print(f"Scanning for new images in: {INPUT_IMAGE_DIR}")
     images_found = False
-    if not os.path.exists(PROCESSED_IMAGE_DIR):
-        os.makedirs(PROCESSED_IMAGE_DIR)
 
-    image_files = sorted([f for f in os.listdir(INPUT_IMAGE_DIR) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+    # Check if directories exist and create them if they don't
+    create_directory_if_not_exists(INPUT_IMAGE_DIR)
+    create_directory_if_not_exists(PROCESSED_IMAGE_DIR)
+    create_directory_if_not_exists(OUTPUT_DETECTION_DIR)
 
-    if image_files:
-        images_found = True
-        print(f"Found {len(image_files)} new images to process.")
+    # Load ONNX model once
+    try:
+        predictor = ONNXPredictor(MODEL_PATH)
+        print("ONNX model loaded successfully.")
+    except Exception as e:
+        print(f"Error loading ONNX model: {e}")
+        return
 
-        for filename in image_files:
+    # Initialize EasyOCR reader
+    try:
+        reader = easyocr.Reader(['en'], gpu=False)
+        print("EasyOCR reader initialized.")
+    except Exception as e:
+        print(f"Error initializing EasyOCR reader: {e}")
+        return
+
+    for filename in os.listdir(INPUT_IMAGE_DIR):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp')):
+            images_found = True
             image_path = os.path.join(INPUT_IMAGE_DIR, filename)
             print(f"Processing image: {image_path}")
+            
+            # Read the image
+            image = cv2.imread(image_path)
+            if image is None:
+                print(f"Error: Could not read image {image_path}. Skipping.")
+                continue
 
+            # Read the tray number from the image using EasyOCR
+            tray_number = "UNKNOWN"
             try:
-                # Read the image using OpenCV
-                image = cv2.imread(image_path)
-                if image is None:
-                    print(f"Could not read image file {image_path}. Skipping.")
-                    continue
+                # Assuming the tray number is in a fixed region
+                roi_image = image[100:200, 100:400]
+                result_easyocr = reader.readtext(roi_image, detail=0)
+                if result_easyocr:
+                    tray_number = " ".join(result_easyocr)
+                    print(f"Detected Tray Number: {tray_number}")
+            except Exception as e:
+                print(f"EasyOCR Error: {e}")
 
-                # Preprocess the image for the model
-                input_tensor = preprocess_image(image)
+            # --- Larvae detection and analysis with ONNX ---
+            larvae_data = []
+            annotated_image = image.copy()
+            
+            try:
+                # You must customize the run_inference method in ONNXPredictor
+                # to get meaningful boxes, confs, and masks.
+                boxes, confs, masks = predictor.run_inference(image)
+                
+                if boxes:
+                    # Logic from the original script to iterate through results
+                    for i in range(len(boxes)):
+                        box = boxes[i]
+                        conf = confs[i]
+                        mask = masks[i]
 
-                # Run inference with ONNX Runtime
-                # Pass the preprocessed image and get the raw output.
-                raw_outputs = session.run(None, {input_name: input_tensor})
+                        # Calculate properties from the mask
+                        larva_area = calculate_area(mask)
+                        larva_weight = calculate_approximate_weight(larva_area)
+                        
+                        # Find bounding box for the mask
+                        x, y, w, h = cv2.boundingRect(mask.astype(np.uint8))
+                        
+                        # Append data to the list
+                        larvae_data.append({
+                            "id": i,
+                            "bbox": [int(x), int(y), int(w), int(h)],
+                            "confidence": float(conf),
+                            "area_pixels": float(larva_area),
+                            "weight_g": float(larva_weight)
+                        })
 
-                # Post-process the output
-                # This part is highly dependent on your specific model.
-                # Here we assume the model output is a single tensor of probabilities.
-                predictions = raw_outputs[0]
-                predicted_class = np.argmax(predictions)
-                confidence = np.max(predictions)
+                        # Draw bounding box and confidence on the image
+                        cv2.rectangle(annotated_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                        cv2.putText(annotated_image, f"{conf:.2f}", (x, y - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    
+                        # Create and apply the color mask
+                        color_mask = np.zeros_like(image, dtype=np.uint8)
+                        color_mask[mask > 0] = (255, 0, 0)
+                        annotated_image = cv2.addWeighted(annotated_image, 1, color_mask, 0.5, 0)
 
-                print(f"Predicted class index: {predicted_class}, Confidence: {confidence:.2f}")
-
-                # Simulate a detection result for the rest of the code logic.
-                if confidence > 0.5: # Use a threshold.
-                    detected_larvae = {
-                        "larvae_count": int(predicted_class),  # Example: use the class index as the count.
-                        "confidence": float(confidence),
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    print(f"Larvae detection result: {detected_larvae}")
-
-                    # --- OCR Part (unchanged from original logic) ---
-                    # The OCR part is kept as per the user's request to maintain logic.
-                    # It reads the tray number from a specified region of interest (ROI).
-                    tray_roi = image[0:100, 0:300]
-                    reader = easyocr.Reader(['en'])
-                    results = reader.readtext(tray_roi)
+                    print(f"Detected {len(larvae_data)} larvae.")
                     
-                    tray_number = None
-                    for (bbox, text, prob) in results:
-                        if text.strip().isdigit() and prob > 0.5:
-                            tray_number = int(text.strip())
-                            print(f"Detected Tray Number: {tray_number}")
-                            break
+                    # Save the annotated image
+                    annotated_filename = f"detected_{os.path.basename(filename)}"
+                    annotated_path = os.path.join(OUTPUT_DETECTION_DIR, annotated_filename)
+                    cv2.imwrite(annotated_path, annotated_image)
+                    print(f"Saved detected image to {annotated_path}")
 
-                    # --- Data Aggregation and MQTT Publishing (unchanged from original logic) ---
+                    # Publish data to MQTT
                     payload = {
-                        "timestamp": datetime.now().isoformat(),
                         "tray_id": tray_number,
-                        "image_path": image_path,
-                        "larvae_count": detected_larvae.get("larvae_count", 0),
-                        "detection_confidence": detected_larvae.get("confidence", 0.0)
+                        "timestamp": datetime.now().isoformat(),
+                        "total_larvae_count": len(larvae_data),
+                        "larvae_details": larvae_data
                     }
-
                     try:
                         mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                        print(f"Data published successfully to MQTT broker.")
+                        print("Data published successfully to MQTT broker.")
                     except Exception as mqtt_e:
                         print(f"Error publishing data to MQTT broker: {mqtt_e}")
                 else:
-                    print(f"No data to publish for this image (low confidence).")
-
+                    print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+            
             except Exception as e:
                 print(f"Error during ONNX inference or data aggregation for {image_path}: {e}")
                 import traceback
@@ -182,7 +229,12 @@ def process_images_from_folder():
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.on_connect = on_connect
     try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        mqtt_client.loop_start()
+
         while True:
             process_images_from_folder()
             print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
