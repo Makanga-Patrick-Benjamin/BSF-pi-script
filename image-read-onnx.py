@@ -62,7 +62,7 @@ print(f"Loading Flat-Bug model from: {FLATBUG_MODEL_PATH} on device: {FLATBUG_DE
 try:
     flatbug_config = DEFAULT_CFG
     # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
-    # flatbug_config["single_scale"] = True
+    flatbug_config["single_scale"] = True
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
         # engine="onnx",
