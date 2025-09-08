@@ -211,7 +211,7 @@ def process_images_from_folder():
             total_count = 0
 
             try:
-                prediction_results = flatbug_predictor.predict(image_path)
+                prediction_results = flatbug_predictor(image_path)
                 
             
                 # Get the base name for output files (e.g., "image29")
