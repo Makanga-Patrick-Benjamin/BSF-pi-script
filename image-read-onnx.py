@@ -213,7 +213,7 @@ def process_images_from_folder():
                     image_path,
                     scale_increment=2/3,
                     scale_before=1.0,
-                    single_scale=False
+                    single_scale=True 
                 )
 
                 # Get the base name for output files (e.g., "image29")
