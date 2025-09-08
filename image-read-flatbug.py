@@ -64,7 +64,7 @@ try:
     # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
-        engine="onnx",
+        # engine="onnx",
         device=FLATBUG_DEVICE,
         dtype=FLATBUG_DTYPE,
         cfg=flatbug_config
