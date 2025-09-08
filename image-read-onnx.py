@@ -50,7 +50,7 @@ PIXELS_PER_MM = 20.0
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, verbose=False, recog_network='integer_only')
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, verbose=False, allowlist=EASYOCR_ALLOWLIST, blocklist=EASYOCR_BLOCKLIST)
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
