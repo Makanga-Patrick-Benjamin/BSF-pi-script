@@ -6,11 +6,12 @@ from datetime import datetime
 import numpy as np
 import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
+import onnxruntime as ort
 
-# --- Flat-Bug Model Imports ---
-from flat_bug.predictor import Predictor
-from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
-from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
+# --- Flat-Bug Model Imports (keep these lines for now, but we will not use Predictor) ---
+# from flat_bug.predictor import Predictor
+# from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
+# from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
@@ -29,272 +30,212 @@ def on_connect(client, userdata, flags, rc, properties):
 # --- Configuration ---
 INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
 PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
-OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Directory to save images with detections.
+MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx" # Your Flat-Bug ONNX model path
+CONFIDENCE_THRESHOLD = 0.25 # Confidence threshold for detections. Lower this if you are missing larvae.
+PROCESS_INTERVAL_SECONDS = 5 # Time to wait before checking for new images again.
 
-# EasyOCR Settings
-EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
-EASYOCR_ALLOWLIST = '0123456789' # Only allow digits for tray number recognition
-EASYOCR_BLOCKLIST = ''
-
-# Script Timing
-PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
-
-# Flat-Bug Model Configuration
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
-FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
-FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
-
-# Calibration Factor (pixels per millimeter)
-PIXELS_PER_MM = 20.0
-
-# --- Initialize EasyOCR Reader ---
-print("Initializing EasyOCR reader. This may download models on first run...")
-try:
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, verbose=False)
-    print("EasyOCR reader initialized successfully for integer-only recognition.")
-except Exception as e:
-    print(f"Error initializing EasyOCR: {e}")
-    print("Please ensure you have an internet connection for the first run to download models.")
-    exit()
-
-# --- Initialize Flat-Bug Model ---
-print(f"Loading Flat-Bug model from: {FLATBUG_MODEL_PATH} on device: {FLATBUG_DEVICE}...")
-try:
-    flatbug_config = DEFAULT_CFG
-    # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
-    flatbug_config["single_scale"] = True
-    flatbug_predictor = Predictor(
-        FLATBUG_MODEL_PATH,
-        # engine="onnx",
-        device=FLATBUG_DEVICE,
-        dtype=FLATBUG_DTYPE,
-        cfg=flatbug_config
-    )
-    print("Flat-Bug model loaded successfully.")
-except Exception as e:
-    print(f"Error loading Flat-Bug model: {e}")
-    print("Please ensure your model path is correct and flat-bug library is installed.")
-    exit()
-
-# --- Initialize MQTT Client ---
+# --- Global objects ---
+# Initialize MQTT client
 mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 mqtt_client.on_connect = on_connect
+mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+mqtt_client.loop_start()
+
+# Initialize EasyOCR reader
+print("Initializing EasyOCR reader. This may download models on first run...")
+# 'en' for English text, `allowlist='0123456789'` to recognize only integers
+reader = easyocr.Reader(['en'], allowlist='0123456789')
+print("EasyOCR reader initialized successfully for integer-only recognition.")
+
+# Initialize ONNX Runtime session
+print(f"Loading Flat-Bug model from: {MODEL_PATH} on device: cpu...")
 try:
-    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    mqtt_client.loop_start() 
+    # Create an inference session with the ONNX model
+    ort_session = ort.InferenceSession(MODEL_PATH)
+    print("Flat-Bug model loaded successfully.")
+
+    # Get the input name and shape
+    input_name = ort_session.get_inputs()[0].name
+    input_shape = ort_session.get_inputs()[0].shape
+    print(f"Model input name: {input_name}, input shape: {input_shape}")
+
 except Exception as e:
-    print(f"Failed to connect to MQTT broker: {e}")
+    print(f"Error loading Flat-Bug model: {e}")
+    # Exit if the model fails to load
     exit()
 
-# --- Image Preprocessing for EasyOCR ---
-def preprocess_image_for_easyocr(image):
-    """Converts image to grayscale and applies median blur for OCR."""
-    if image is None or image.size == 0:
-        return None
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.medianBlur(gray, 3) 
-    return denoised
-
-# --- Text Extraction Function (EasyOCR) ---
-def extract_text_with_easyocr(image_path):
+def preprocess_image(image):
     """
-    Extracts integer text (assumed to be tray number) from an image using EasyOCR.
-    Returns the extracted integer as a string and its confidence.
+    Prepares a single image for ONNX model inference.
+    Resizes, normalizes, and reshapes the image to the model's expected format.
     """
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"Error: Could not read image {image_path}")
-        return None, 0
+    # Assuming the model expects 640x640 input. Adjust if your model is different.
+    img_size = input_shape[2] # Typically 640
+    
+    # Resize the image to the expected input size
+    resized_img = cv2.resize(image, (img_size, img_size), interpolation=cv2.INTER_AREA)
 
-    processed_image = preprocess_image_for_easyocr(image)
-    if processed_image is None:
-        return None, 0
+    # Convert the image from BGR (OpenCV default) to RGB
+    rgb_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
 
-    extracted_integers = []
-    all_confidences = []
+    # Normalize pixel values to the range [0.0, 1.0] and transpose dimensions
+    # The ONNX model expects the format (1, 3, height, width)
+    normalized_img = rgb_img.astype(np.float32) / 255.0
+    input_tensor = np.transpose(normalized_img, (2, 0, 1))
+    input_tensor = np.expand_dims(input_tensor, axis=0)
 
-    try:
-        results = reader.readtext(processed_image, allowlist=EASYOCR_ALLOWLIST, blocklist=EASYOCR_BLOCKLIST)
+    return input_tensor, resized_img # Return resized for drawing later
 
-
-        for (bbox, text, confidence) in results:
-            if text.strip():
-                cleaned_text = ''.join(filter(str.isdigit, text.strip()))
-                if cleaned_text:
-                    try:
-                        integer_value = int(cleaned_text)
-                        extracted_integers.append(str(integer_value))
-                        all_confidences.append(float(confidence))
-                        # print(f"  Recognized integer '{integer_value}' with confidence: {float(confidence):.2f}")
-                    except ValueError:
-                        print(f"  Skipping non-integer segment after filtering: '{cleaned_text}' from original '{text}'")
-                else:
-                    print(f"  No digits found after filtering: '{text}'")
-            else:
-                print("  Skipping empty text detection.")
-
-    except Exception as e:
-        print(f"Error during EasyOCR processing: {e}")
-        return None, 0
-
-    if extracted_integers:
-        final_extracted_text = extracted_integers[0]
-        overall_avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0
-        return final_extracted_text, overall_avg_confidence * 100
-    else:
-        return None, 0
-
-# --- Larva Measurement and Weight Estimation ---
-def calculate_larva_metrics(bbox, mask=None):
+def postprocess_results(detections, resized_img, original_img_shape):
     """
-    Calculates larva length, width, area, and estimated weight based on bounding box and mask.
-    Assumes bbox is [x1, y1, x2, y2] in pixels.
+    Processes the raw ONNX output to get bounding boxes, confidence scores,
+    and class IDs. It then scales the boxes back to the original image size.
     """
-    x1, y1, x2, y2 = bbox
-    length_px = abs(y2 - y1)
-    width_px = abs(x2 - x1)
+    # The output format of the ONNX model can vary.
+    # The common YOLOv8 ONNX output shape is (1, 84, 8400) where 84 is
+    # [x, y, w, h, conf, class0, class1, ...]
+    
+    output = detections[0].squeeze() # Remove batch dimension
 
-    area_px = 0
-    if mask is not None:
-        area_px = np.sum(mask)
-    else:
-        area_px = length_px * width_px
+    # Find the confidence score and class ID for each detection
+    conf_scores = output[4, :]
+    class_ids = np.argmax(output[5:, :], axis=0)
 
-    length_mm = length_px / PIXELS_PER_MM
-    width_mm = width_px / PIXELS_PER_MM
-    area_sq_mm = area_px / (PIXELS_PER_MM ** 2)
+    # Filter out low-confidence detections
+    valid_detections = conf_scores > CONFIDENCE_THRESHOLD
 
-    WEIGHT_PER_SQ_MM = 6.67
-    estimated_weight_mg = area_sq_mm * WEIGHT_PER_SQ_MM
+    boxes = output[0:4, valid_detections].T
+    conf_scores = conf_scores[valid_detections]
+    class_ids = class_ids[valid_detections]
 
-    return length_mm, width_mm, area_sq_mm, estimated_weight_mg
+    # Convert boxes from normalized [x,y,w,h] to absolute [x1,y1,x2,y2]
+    # This might need adjustment depending on your model's output format
+    img_h, img_w = original_img_shape[:2]
+    
+    # YOLOv8 format: center_x, center_y, width, height
+    boxes[:, 0] = boxes[:, 0] - boxes[:, 2] / 2 # x1
+    boxes[:, 1] = boxes[:, 1] - boxes[:, 3] / 2 # y1
+    boxes[:, 2] = boxes[:, 0] + boxes[:, 2]     # x2
+    boxes[:, 3] = boxes[:, 1] + boxes[:, 3]     # y2
 
-# --- Main Processing Loop ---
+    # Scale boxes back to the original image dimensions
+    scale_x = img_w / resized_img.shape[1]
+    scale_y = img_h / resized_img.shape[0]
+    
+    boxes[:, [0, 2]] *= scale_x
+    boxes[:, [1, 3]] *= scale_y
+
+    return boxes, conf_scores, class_ids
+
+# --- Main Functions ---
 def process_images_from_folder():
     """
-    Monitors the input directory for new images, processes them,
-    and publishes aggregated data to MQTT.
+    Main function to process images in a folder, perform OCR and detection,
+    and publish data to MQTT.
     """
-    os.makedirs(INPUT_IMAGE_DIR, exist_ok=True)
-    os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
-
-    print(f"\n--- Checking for new images in {INPUT_IMAGE_DIR} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
-
+    print("Checking for new images to process...")
     images_found = False
-    for filename in os.listdir(INPUT_IMAGE_DIR):
-        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-            images_found = True
-            image_path = os.path.join(INPUT_IMAGE_DIR, filename)
-            print(f"Processing image: {image_path}")
 
-            tray_number_str, ocr_confidence = extract_text_with_easyocr(image_path)
-            if tray_number_str:
-                try:
-                    tray_number = int(tray_number_str)
-                    print(f"Detected Tray Number: {tray_number} (Confidence: {ocr_confidence:.2f}%)")
-                except ValueError:
-                    print(f"Warning: Could not convert '{tray_number_str}' to an integer for tray number. Skipping larvae analysis for this image.")
-                    tray_number = None
-            else:
-                print("No tray number detected by EasyOCR. Skipping larvae analysis for this image.")
-                tray_number = None
+    # Get a list of image files to process
+    image_files = [f for f in os.listdir(INPUT_IMAGE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
 
-            if tray_number is None:
-                destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
-                os.rename(image_path, destination_path)
-                print(f"Moved image (no tray number detected): {image_path} to {destination_path}")
+    # Process images one by one
+    for filename in image_files:
+        images_found = True
+        image_path = os.path.join(INPUT_IMAGE_DIR, filename)
+        print(f"Processing new image: {image_path}")
+
+        try:
+            # Step 1: Read the image using OpenCV
+            original_img = cv2.imread(image_path)
+            if original_img is None:
+                print(f"Warning: Could not read image at {image_path}. Skipping.")
                 continue
 
-            print(f"Running Flat-Bug inference on {image_path}...")
-            larvae_data_to_send = []
-            total_count = 0
-
+            # Step 2: Extract tray number using EasyOCR
+            tray_number = None
             try:
-                prediction_results = flatbug_predictor(image_path)
-                
-            
-                # Get the base name for output files (e.g., "image29")
-                base_filename = os.path.splitext(filename)[0]
-                
-                if prediction_results and hasattr(prediction_results, 'boxes') and prediction_results.boxes is not None and len(prediction_results.boxes) > 0:
-                    total_count = len(prediction_results.boxes)
-                    print(f"Found {total_count} larvae in Tray {tray_number}.")
-
-                    # Use prediction_results.plot() for overview image
-                    output_overview_path = os.path.join(OUTPUT_DETECTION_DIR, filename)
-                    prediction_results.plot(
-                        outpath=output_overview_path,
-                        masks=True, # Set to True if your model predicts masks and you want to visualize them
-                        boxes=True,
-                        confidence=True,
-                        linewidth=2,
-                        contour_color=(0, 255, 0), # Green for mask contours
-                        box_color=(255, 0, 0) # Red for bounding boxes
-                    )
-                    print(f"Saved image with detections to: {output_overview_path}")
-
-                    # Continue with calculating metrics for MQTT payload
-                    for larva_id in range(total_count):
-                        bbox_xyxy = prediction_results.boxes[larva_id].tolist()
-                        larva_confidence = prediction_results.confs[larva_id].item()
-
-                        mask = None
-                        if hasattr(prediction_results, 'masks') and prediction_results.masks is not None and len(prediction_results.masks) > larva_id:
-                            larva_mask_object = prediction_results.masks[larva_id]
-                            mask = larva_mask_object.data.cpu().numpy().astype(np.uint8)
-
-                        length_mm, width_mm, area_sq_mm, estimated_weight_mg = \
-                            calculate_larva_metrics(bbox_xyxy, mask)
-
-                        larvae_data_to_send.append({
-                            "tray_number": tray_number,
-                            "length": round(length_mm, 2),
-                            "width": round(width_mm, 2),
-                            "area": round(area_sq_mm, 2),
-                            "weight": round(estimated_weight_mg, 2),
-                            "count": 1
-                        })
-                        print(f"  Larva {larva_id + 1}: L={length_mm:.2f}mm, W={width_mm:.2f}mm, A={area_sq_mm:.2f}mm², Wt={estimated_weight_mg:.2f}mg (Conf: {larva_confidence:.2f}%)")
-                else:
-                    print(f"No larvae detected by Flat-Bug in Tray {tray_number}.")
-
-                if total_count > 0:
-                    avg_length = sum(d['length'] for d in larvae_data_to_send) / total_count
-                    avg_width = sum(d['width'] for d in larvae_data_to_send) / total_count
-                    avg_area = sum(d['area'] for d in larvae_data_to_send) / total_count
-                    avg_weight = sum(d['weight'] for d in larvae_data_to_send) / total_count
-
-                    payload = {
-                        "tray_number": tray_number,
-                        "length": round(avg_length, 2),
-                        "width": round(avg_width, 2),
-                        "area": round(avg_area, 2),
-                        "weight": round(avg_weight, 2),
-                        "count": total_count
-                    }
-
-                    print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
-                    try:
-                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                        print(f"Data published successfully to MQTT broker.")
-                    except Exception as mqtt_e:
-                        print(f"Error publishing data to MQTT broker: {mqtt_e}")
-                else:
-                    print(f"No data to publish for Tray {tray_number} (no larvae detected).")
-
+                # The OCR needs a grayscale image
+                gray_image = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+                # Define a specific region of interest (ROI) for the tray number
+                # Adjust these coordinates based on your image layout
+                # Example: tray_roi = gray_image[y_start:y_end, x_start:x_end]
+                # For this example, we'll try to find it on the whole image
+                ocr_results = reader.readtext(gray_image)
+                if ocr_results:
+                    # Look for the first result that looks like a tray number (e.g., a single integer)
+                    for (bbox, text, prob) in ocr_results:
+                        if text.isdigit() and len(text) <= 3 and prob > 0.5: # Simple heuristic
+                            tray_number = int(text)
+                            print(f"Detected Tray Number: {tray_number} with confidence {prob:.2f}")
+                            break
             except Exception as e:
-                print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"Error during OCR: {e}")
+            
+            if tray_number is None:
+                print("Could not reliably detect tray number. Skipping this image.")
+                continue
 
+            # Step 3: Flat-Bug inference with ONNX Runtime
+            print(f"Starting larvae detection for Tray {tray_number}...")
+            
+            # Pre-process the image for the model
+            input_tensor, resized_img_for_onnx = preprocess_image(original_img)
+            
+            # Run inference
+            detections = ort_session.run(None, {input_name: input_tensor})
+
+            # Post-process the results
+            bboxes, scores, class_ids = postprocess_results(detections, resized_img_for_onnx, original_img.shape)
+
+            # Assuming class_id 0 is 'larvae'.
+            larvae_count = sum(1 for c in class_ids if c == 0)
+            print(f"Detected {larvae_count} larvae in Tray {tray_number}.")
+
+            # Step 4: Aggregate and publish data to MQTT
+            payload = {
+                "tray_number": tray_number,
+                "timestamp": datetime.now().isoformat(),
+                "larvae_count": larvae_count,
+            }
+
+            if larvae_count > 0:
+                # Draw detections on the image for visual verification
+                detected_img = original_img.copy()
+                for bbox, score in zip(bboxes, scores):
+                    x1, y1, x2, y2 = [int(v) for v in bbox]
+                    cv2.rectangle(detected_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(detected_img, f'{score:.2f}', (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                # Save the detected image
+                output_filename = f"tray_{tray_number}_larvae_detected.jpg"
+                output_path = os.path.join(OUTPUT_DETECTION_DIR, output_filename)
+                os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
+                cv2.imwrite(output_path, detected_img)
+                print(f"Saved image with detections to: {output_path}")
+
+                try:
+                    mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
+                    print(f"Data published successfully to MQTT broker.")
+                except Exception as mqtt_e:
+                    print(f"Error publishing data to MQTT broker: {mqtt_e}")
+            else:
+                print(f"No data to publish for Tray {tray_number} (no larvae detected).")
+
+            # Move the processed image to the 'processed' folder
             destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
             os.rename(image_path, destination_path)
             print(f"Moved processed image: {image_path} to {destination_path}")
 
+        except Exception as e:
+            print(f"Error during processing for {image_path}: {e}")
+            import traceback
+            traceback.print_exc()
+
     if not images_found:
         print("No new images found in the input folder.")
-        
+
 # --- Main Execution Block ---
 if __name__ == "__main__":
     try:
