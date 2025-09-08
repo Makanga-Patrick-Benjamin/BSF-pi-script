@@ -42,7 +42,7 @@ PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process th
 # Flat-Bug Model Configuration
 FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
-FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
+FLATBUG_DTYPE = "None" # Use float32 for CPU, float16 for GPU if supported
 
 # Calibration Factor (pixels per millimeter)
 PIXELS_PER_MM = 20.0
@@ -50,7 +50,7 @@ PIXELS_PER_MM = 20.0
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False, verbose=False, recog_network='integer_only')
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
@@ -214,7 +214,7 @@ def process_images_from_folder():
                     image_path,
                     scale_increment=2/3,
                     scale_before=1.0,
-                    # single_scale=True  # The fix is to set this parameter to True
+                    single_scale=True  # The fix is to set this parameter to True
             )
 
                 # Get the base name for output files (e.g., "image29")
