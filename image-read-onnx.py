@@ -211,13 +211,9 @@ def process_images_from_folder():
             total_count = 0
 
             try:
-                prediction_results = flatbug_predictor.pyramid_predictions(
-                    image_path,
-                    scale_increment=2/3,
-                    scale_before=1.0,
-                    single_scale=True  # The fix is to set this parameter to True
-            )
-
+                prediction_results = flatbug_predictor.predict(image_path)
+                
+            
                 # Get the base name for output files (e.g., "image29")
                 base_filename = os.path.splitext(filename)[0]
                 
