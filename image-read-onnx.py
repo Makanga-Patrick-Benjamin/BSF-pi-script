@@ -8,10 +8,6 @@ import paho.mqtt.client as mqtt
 import json
 import onnxruntime as ort
 
-# --- ONNX Runtime Model Imports ---
-# The logic for pre/post-processing depends on your model's architecture.
-# We'll define a class to handle this.
-
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
@@ -27,11 +23,11 @@ def on_connect(client, userdata, flags, rc, properties):
 
 # --- Configuration ---
 # Set directories to be relative to the script's location
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_IMAGE_DIR = os.path.join(SCRIPT_DIR, "img")
-PROCESSED_IMAGE_DIR = os.path.join(SCRIPT_DIR, "processed_images")
-OUTPUT_DETECTION_DIR = os.path.join(SCRIPT_DIR, "detected_images")
-MODEL_PATH = os.path.join(SCRIPT_DIR, "bestmodel.onnx")
+# SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
+PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
+MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx"
 
 PROCESS_INTERVAL_SECONDS = 5  # Check for new images every 5 seconds
 
