@@ -64,7 +64,7 @@ try:
     # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
-        engine="onnx",
+        # engine="onnx",
         device=FLATBUG_DEVICE,
         dtype=FLATBUG_DTYPE,
         cfg=flatbug_config
@@ -213,7 +213,7 @@ def process_images_from_folder():
                     image_path,
                     scale_increment=2/3,
                     scale_before=1.0,
-                    single_scale=True 
+                    single_scale=True  # The fix is to set this parameter to True
                 )
 
                 # Get the base name for output files (e.g., "image29")
@@ -296,7 +296,7 @@ def process_images_from_folder():
 
     if not images_found:
         print("No new images found in the input folder.")
-
+        
 # --- Main Execution Block ---
 if __name__ == "__main__":
     try:
