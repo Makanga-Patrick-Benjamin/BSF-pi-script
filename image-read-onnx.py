@@ -6,7 +6,9 @@ from datetime import datetime
 import numpy as np
 import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
-from math import sqrt
+import traceback # To print full traceback for debugging
+
+# --- Flat-Bug Model Imports ---
 from flat_bug.predictor import Predictor
 from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
 from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
@@ -15,7 +17,6 @@ from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's in
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883 # Standard unencrypted MQTT port
 MQTT_TOPIC = "bsf_monitor/larvae_data" # <--- IMPORTANT: Make this topic unique for your project!
-                                      # E.g., "your_username/bsf_monitor/larvae_data"
 
 # --- Callbacks for MQTT Client ---
 def on_connect(client, userdata, flags, rc, properties):
@@ -28,11 +29,7 @@ def on_connect(client, userdata, flags, rc, properties):
 # --- Configuration ---
 INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
 PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
-OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Directory for saving images with detections
-
-# Ensure output directories exist
-os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
+OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images"
 
 # EasyOCR Settings
 EASYOCR_LANGUAGES = ['en'] # Languages to load. 'en' for English.
@@ -42,190 +39,112 @@ EASYOCR_BLOCKLIST = ''
 # Script Timing
 PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
-# --- Model Initialization ---
-# Assuming you have the flat_bug_M.pt model file in your project directory
-MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx"
-# The default config in the flat-bug library is suitable for our needs
-cfg = read_cfg(DEFAULT_CFG)
-try:
-    print(f"Initializing Flat-Bug model from {MODEL_PATH}...")
-    flatbug_predictor = Predictor.from_path(MODEL_PATH)
-    print("Flat-Bug model initialized successfully.")
-    # Set the logging level for flat-bug's internal logger
-    set_log_level("INFO")
-except Exception as e:
-    print(f"Error initializing Flat-Bug model: {e}")
-    flatbug_predictor = None
-
-# Initialize EasyOCR reader once to save time
-try:
-    print("Initializing EasyOCR reader...")
-    ocr_reader = easyocr.Reader(EASYOCR_LANGUAGES)
-    print("EasyOCR reader initialized.")
-except Exception as e:
-    print(f"Error initializing EasyOCR: {e}")
-    ocr_reader = None
-
-# --- MQTT Client Setup ---
-mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-mqtt_client.on_connect = on_connect
-try:
-    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    mqtt_client.loop_start() # Start the loop in a separate thread
-except Exception as e:
-    print(f"Failed to connect to MQTT broker: {e}")
-
-# --- Helper Functions ---
-def get_tray_number(image_path):
-    """
-    Extracts the tray number from the image using OCR.
-    Assumes the tray number is the first detected number in the image.
-    """
-    if not ocr_reader:
-        return None
-    try:
-        # Load the image for OCR
-        img_ocr = cv2.imread(image_path)
-        # Use EasyOCR to read text from the image
-        results = ocr_reader.readtext(img_ocr, allowlist=EASYOCR_ALLOWLIST)
-        
-        # We assume the first detected number is the tray number
-        if results:
-            for (bbox, text, prob) in results:
-                # Basic check to ensure it looks like a number
-                if text.isdigit() and len(text) <= 5: 
-                    return int(text)
-        return None
-    except Exception as e:
-        print(f"Error performing OCR on image {image_path}: {e}")
-        return None
-
-def calculate_larvae_metrics(predictions):
-    """
-    Calculates average length, width, area, and weight from a list of predictions.
-    This is a simplified example. You would need to calibrate these metrics.
-    """
-    if not predictions:
-        return 0, 0, 0, 0
-    
-    larvae_data = []
-    for pred in predictions:
-        # Using the bounding box to approximate metrics
-        x1, y1, x2, y2 = pred.box.xyxy[0].cpu().numpy()
-        width = x2 - x1
-        height = y2 - y1
-        area = width * height
-        
-        # Simplified metrics based on bounding box
-        length = max(width, height)
-        avg_width = min(width, height)
-        
-        larvae_data.append({
-            'length': length,
-            'width': avg_width,
-            'area': area,
-            'weight': area * 0.05 # Placeholder conversion factor
-        })
-    
-    if not larvae_data:
-        return 0, 0, 0, 0
-    
-    avg_length = np.mean([d['length'] for d in larvae_data])
-    avg_width = np.mean([d['width'] for d in larvae_data])
-    avg_area = np.mean([d['area'] for d in larvae_data])
-    avg_weight = np.mean([d['weight'] for d in larvae_data])
-    
-    return round(avg_length, 2), round(avg_width, 2), round(avg_area, 2), round(avg_weight, 2)
-
+# --- Main Logic ---
 def process_images_from_folder():
     """
-    Scans the input directory for new images, processes them, and moves them.
+    Looks for new images in the input directory, processes them, and publishes data to MQTT.
     """
-    if not flatbug_predictor:
-        print("Flat-Bug predictor is not initialized. Exiting.")
-        return
-
-    images_found = False
     print(f"Checking for new images in {INPUT_IMAGE_DIR}...")
-    for filename in sorted(os.listdir(INPUT_IMAGE_DIR)):
-        if not filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-            continue
+    images_found = False
 
-        image_path = os.path.join(INPUT_IMAGE_DIR, filename)
-        images_found = True
+    # Initialize EasyOCR reader once
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
 
-        try:
-            # Step 1: Read the image using OpenCV
-            image = cv2.imread(image_path)
-            if image is None:
-                print(f"Warning: Could not read image at {image_path}. Skipping.")
-                continue
+    # Corrected: Use DEFAULT_CFG directly, as it's already a dictionary
+    # The read_cfg function expects a file path, not a dictionary.
+    cfg = DEFAULT_CFG
+    set_log_level(cfg.log_level)
 
-            # Step 2: Get the tray number using OCR
-            tray_number = get_tray_number(image_path)
-            if tray_number is None:
-                print(f"Warning: Could not detect a tray number for image {image_path}. Skipping.")
-                continue
-            
-            # Step 3: Run inference with Flat-Bug
-            flatbug_logger.info(f"Processing image for larvae detection: {image_path}")
-            
-            # We are now using the `predict` method, which is more robust for a single image.
-            # The original `pyramid_predictions` was likely causing the batching error.
-            # The `predict` function expects a single image and handles the necessary transformations internally.
-            
-            prediction_results = flatbug_predictor.predict(
-                image=image_path
-            )
+    # Initialize Flat-Bug Predictor
+    predictor = Predictor(cfg)
+    
+    # Ensure processed directory exists
+    os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DETECTION_DIR, exist_ok=True)
 
-            # Check if any larvae were detected
-            if prediction_results and prediction_results.pred:
-                larvae_count = len(prediction_results.pred[0])
-                avg_length, avg_width, avg_area, avg_weight = calculate_larvae_metrics(prediction_results.pred[0])
-                print(f"Detected {larvae_count} larvae for Tray {tray_number}.")
+    for filename in os.listdir(INPUT_IMAGE_DIR):
+        if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+            images_found = True
+            image_path = os.path.join(INPUT_IMAGE_DIR, filename)
+            print(f"Processing image: {image_path}")
 
-                # Save the image with detections for visual inspection
-                annotated_image = flatbug_predictor.annotate(prediction_results)
-                output_path = os.path.join(OUTPUT_DETECTION_DIR, f"detected_{filename}")
-                cv2.imwrite(output_path, annotated_image)
-                print(f"Saved image with detections to {output_path}")
+            try:
+                # Step 1: Read the image
+                image_cv = cv2.imread(image_path)
+                if image_cv is None:
+                    print(f"Error: Could not read image {image_path}. Skipping.")
+                    continue
 
-                # Step 4: Aggregate and send data
-                timestamp = datetime.now().isoformat()
-                payload = {
-                    "tray_number": tray_number,
-                    "image_path": image_path,
-                    "timestamp": timestamp,
-                    "larvae_count": larvae_count,
-                    "avg_length": avg_length,
-                    "avg_width": avg_width,
-                    "avg_area": avg_area,
-                    "avg_weight": avg_weight
-                }
+                # Step 2: Perform OCR to get the tray number
+                ocr_result = reader.readtext(image_path, allowlist=EASYOCR_ALLOWLIST)
+                tray_number = None
+                if ocr_result:
+                    # Assuming the first detected number is the tray number
+                    tray_number = ocr_result[0][1]
+                    print(f"Detected Tray Number: {tray_number}")
+                else:
+                    print("No tray number detected.")
+                    # Fallback or skip if no tray number can be read
+                    continue
 
-                # Publish data to MQTT
-                try:
-                    mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                    print(f"Data published successfully to MQTT broker.")
-                except Exception as mqtt_e:
-                    print(f"Error publishing data to MQTT broker: {mqtt_e}")
-            else:
-                print(f"No larvae detected for Tray {tray_number}. No data published to MQTT.")
+                # Step 3: Run YOLOv8 inference with the Flat-Bug predictor
+                results = predictor.predict(image_path, single_scale=True)
+                
+                # Check if larvae were detected
+                if results and results.get_count() > 0:
+                    larvae_count = results.get_count()
+                    avg_length = np.mean([l.length for l in results.get_larvae()]) if larvae_count > 0 else 0
+                    avg_width = np.mean([l.width for l in results.get_larvae()]) if larvae_count > 0 else 0
+                    avg_area = np.mean([l.area for l in results.get_larvae()]) if larvae_count > 0 else 0
+                    avg_weight = np.mean([l.weight for l in results.get_larvae()]) if larvae_count > 0 else 0
+                    
+                    print(f"Detected {larvae_count} larvae for Tray {tray_number}.")
+                    print(f"Average Length: {avg_length:.2f}mm")
+                    print(f"Average Width: {avg_width:.2f}mm")
+                    print(f"Average Area: {avg_area:.2f}mm²")
+                    print(f"Average Weight: {avg_weight:.2f}mg")
 
-        except Exception as e:
-            print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
-            import traceback
-            traceback.print_exc()
+                    # Step 4: Aggregate data into a JSON payload
+                    payload = {
+                        "tray_number": int(tray_number),
+                        "larvae_count": larvae_count,
+                        "avg_length_mm": round(avg_length, 2),
+                        "avg_width_mm": round(avg_width, 2),
+                        "avg_area_mm2": round(avg_area, 2),
+                        "avg_weight_mg": round(avg_weight, 2),
+                        "timestamp": datetime.now().isoformat()
+                    }
 
-        destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
-        os.rename(image_path, destination_path)
-        print(f"Moved processed image: {image_path} to {destination_path}")
+                    # Step 5: Publish data to MQTT
+                    try:
+                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
+                        print(f"Data published successfully to MQTT broker.")
+                    except Exception as mqtt_e:
+                        print(f"Error publishing data to MQTT broker: {mqtt_e}")
+                else:
+                    print(f"No larvae detected for Tray {tray_number}. No data published to MQTT.")
+
+            except Exception as e:
+                print(f"Error during Flat-Bug inference or data aggregation for {image_path}: {e}")
+                # It's good practice to log the full traceback for debugging
+                traceback.print_exc()
+
+            # Step 6: Move the processed image
+            destination_path = os.path.join(PROCESSED_IMAGE_DIR, filename)
+            os.rename(image_path, destination_path)
+            print(f"Moved processed image: {image_path} to {destination_path}")
 
     if not images_found:
         print("No new images found in the input folder.")
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
+    # --- MQTT Setup ---
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.on_connect = on_connect
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client.loop_start()
+
     try:
         while True:
             process_images_from_folder()
@@ -236,10 +155,8 @@ if __name__ == "__main__":
         print("\nExiting program due to user interruption.")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-        import traceback
-        traceback.print_exc()
+        traceback.print_exc() # Print traceback for unexpected errors
     finally:
-        mqtt_client.loop_stop()
-        mqtt_client.disconnect()
-
+        mqtt_client.loop_stop() # Stop the MQTT loop
+        mqtt_client.disconnect() # Disconnect from the broker
         print("Program finished.")
