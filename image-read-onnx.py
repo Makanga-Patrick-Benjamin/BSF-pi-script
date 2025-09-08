@@ -42,7 +42,7 @@ PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process th
 # Flat-Bug Model Configuration
 FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
-FLATBUG_DTYPE = "None" # Use float32 for CPU, float16 for GPU if supported
+FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 
 # Calibration Factor (pixels per millimeter)
 PIXELS_PER_MM = 20.0
