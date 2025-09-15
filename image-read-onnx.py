@@ -27,7 +27,7 @@ def on_connect(client, userdata, flags, rc, properties):
 # Set directories to be relative to the script's location
 # SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
-PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
+PROCESSED_IMG_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
 OUTPUT_DETECTION_DIR = "/home/pato/Documents/sdf/BSF-pi-script/detected_images" # Images with bounding boxes
 MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx"
 
