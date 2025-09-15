@@ -34,10 +34,19 @@ A Bash script designed to simplify the installation and configuration of the BSF
 ```bash
    pip install -r requirements.txt
 ```
-5.  Execute the Script:
+5.  Flat-Bug Model Configuration. Open and locate the "FLATBUG_MODEL_PATH" in image-read-flatbug.py and replace with the right model location on your raspberry pi:
+- FLATBUG_MODEL_PATH = "/your_file_path_for_the_model_you_are_using/bestyolov8s.pt"
+
+6.  Configuration. locate the file with the images you want to classify. you have to also provide as second location where ther are to move to as shown below(locate these lines of code as well):
+- INPUT_IMAGE_DIR = "/home/pato/Documents/sdf/img" # <--- IMPORTANT: SET YOUR INPUT IMAGE FOLDER HERE!
+- PROCESSED_IMAGE_DIR = "/home/pato/Documents/sdf/processed_images" # Directory to move processed images. Sort and change images here after processing.
+
+7.  Execute the Script:
 ```bash
-   python3 imageread.py
+   python3 image-read-flatbug.py
 ```
+
+
 ## view content on webdash board
 [https://soldierfly-fly-monitor.onrender.com](https://soldierfly-fly-monitor.onrender.com) *Dashboard layout*
 

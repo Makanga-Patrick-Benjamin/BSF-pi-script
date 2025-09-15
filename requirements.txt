@@ -4,5 +4,5 @@ opencv_python==4.11.0.86
 opencv_python_headless==4.11.0.86
 paho_mqtt==1.6.1
 # picamera2==0.3.27
-# picamera2==0.3.29
+picamera2==0.3.29
 ultralytics==8.3.166

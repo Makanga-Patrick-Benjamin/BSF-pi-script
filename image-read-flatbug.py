@@ -6,11 +6,17 @@ from datetime import datetime
 import numpy as np
 import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
+import requests
 
 # --- Flat-Bug Model Imports ---
 from flat_bug.predictor import Predictor
 from flat_bug.config import DEFAULT_CFG, read_cfg # For configuration if needed
 from flat_bug import logger as flatbug_logger, set_log_level # For flat-bug's internal logging
+
+# --- Web API Configuration ---
+# Set the URL for your web application's API endpoint
+WEB_APP_API_URL = "https://soldierfly-fly-monitor.onrender.com/api/larvae_data" # <--- IMPORTANT: CHANGE TO YOUR WEB APP'S API URL
+#B_APP_API_URL = "http://192.168.162.253:8000/api/larvae_data" # Local testing URL
 
 # --- MQTT Configuration ---
 MQTT_BROKER = "broker.hivemq.com"
@@ -40,7 +46,7 @@ EASYOCR_BLOCKLIST = ''
 PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestmodel.onnx" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8s.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
 FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 
@@ -50,7 +56,7 @@ PIXELS_PER_MM = 20.0
 # --- Initialize EasyOCR Reader ---
 print("Initializing EasyOCR reader. This may download models on first run...")
 try:
-    reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=False)
+    reader = easyocr.Reader(EASYOCR_LANGUAGES, recog_network='latin_g2', gpu=False)
     print("EasyOCR reader initialized successfully for integer-only recognition.")
 except Exception as e:
     print(f"Error initializing EasyOCR: {e}")
@@ -64,7 +70,6 @@ try:
     # You can customize flatbug_config here, e.g., flatbug_config["SCORE_THRESHOLD"] = 0.6
     flatbug_predictor = Predictor(
         FLATBUG_MODEL_PATH,
-        # engine="onnx",
         device=FLATBUG_DEVICE,
         dtype=FLATBUG_DTYPE,
         cfg=flatbug_config
@@ -276,10 +281,21 @@ def process_images_from_folder():
                         "count": total_count
                     }
 
-                    print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
+                    print(f"Publishing aggregated data for Tray {tray_number}...")
                     try:
+                        # --- START OF MODIFICATION ---
+                        # Comment out the web API upload
+                        # response = requests.post(WEB_APP_API_URL, json=payload)
+                        # response.raise_for_status()
+                        # print(f"Data uploaded successfully to API. Status code: {response.status_code}")
+                        # print(f"Response from API: {response.json()}")
+
+                        # Uncomment and use the MQTT publish call
                         mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                        print(f"Data published successfully to MQTT broker.")
+                        print(f"Data published successfully to MQTT broker on topic '{MQTT_TOPIC}'.")
+                        # --- END OF MODIFICATION ---
+                    except requests.exceptions.RequestException as api_e:
+                        print(f"Error uploading data to web API: {api_e}")
                     except Exception as mqtt_e:
                         print(f"Error publishing data to MQTT broker: {mqtt_e}")
                 else:
@@ -296,6 +312,17 @@ def process_images_from_folder():
 
     if not images_found:
         print("No new images found in the input folder.")
+
+def publish_to_api(tray_number, total_count, avg_length, avg_weight, avg_area, avg_larvae_weight):
+    # This function is now redundant as we're using MQTT
+    # You can keep it or remove it, but it's not called in the main loop.
+    pass
+
+def publish_to_mqtt(payload_data):
+    # This function is now redundant as we're publishing directly in the main loop.
+    # You can keep it or remove it.
+    pass
+
 
 # --- Main Execution Block ---
 if __name__ == "__main__":

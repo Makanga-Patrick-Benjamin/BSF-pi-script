@@ -281,19 +281,23 @@ def process_images_from_folder():
                         "count": total_count
                     }
 
-                    print(f"Publishing aggregated data for Tray {tray_number} to MQTT topic '{MQTT_TOPIC}': {payload}")
+                    print(f"Publishing aggregated data for Tray {tray_number}...")
                     try:
-                        # # Publish to MQTT
-                        # mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
-                        # print(f"Data published successfully to MQTT broker.")
-                        # # Upload to web API
-                        response = requests.post(WEB_APP_API_URL, json=payload)
-                        response.raise_for_status()  # This will raise an HTTPError if the status is 4xx or 5xx
+                        # --- START OF MODIFICATION ---
+                        # Comment out the web API upload
+                        # response = requests.post(WEB_APP_API_URL, json=payload)
+                        # response.raise_for_status()
+                        # print(f"Data uploaded successfully to API. Status code: {response.status_code}")
+                        # print(f"Response from API: {response.json()}")
 
-                        print(f"Data uploaded successfully to API. Status code: {response.status_code}")
-                        print(f"Response from API: {response.json()}")
+                        # Uncomment and use the MQTT publish call
+                        mqtt_client.publish(MQTT_TOPIC, json.dumps(payload), qos=1)
+                        print(f"Data published successfully to MQTT broker on topic '{MQTT_TOPIC}'.")
+                        # --- END OF MODIFICATION ---
                     except requests.exceptions.RequestException as api_e:
                         print(f"Error uploading data to web API: {api_e}")
+                    except Exception as mqtt_e:
+                        print(f"Error publishing data to MQTT broker: {mqtt_e}")
                 else:
                     print(f"No data to publish for Tray {tray_number} (no larvae detected).")
 
@@ -310,53 +314,15 @@ def process_images_from_folder():
         print("No new images found in the input folder.")
 
 def publish_to_api(tray_number, total_count, avg_length, avg_weight, avg_area, avg_larvae_weight):
-    """
-    Publishes the larvae data to the web API.
-    Converts numpy float types to standard Python floats.
-    """
-    payload = {
-        "tray_number": tray_number,
-        "count": total_count,
-        "length": float(avg_length), # Ensure this is a standard float
-        "width": None, # If this is not a part of your detection, you can set it to None or remove it
-        "area": float(avg_area), # Convert np.float64 to float
-        "weight": float(avg_larvae_weight) # Convert np.float64 to float
-    }
-
-    try:
-        response = requests.post(WEB_APP_API_URL, json=payload, headers={'Content-Type': 'application/json'})
-        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
-        print("Data published successfully to API.")
-    except requests.exceptions.HTTPError as errh:
-        print(f"Error uploading data to web API: {errh}")
-        print(f"Response content: {response.text}")
-    except requests.exceptions.ConnectionError as errc:
-        print(f"Error connecting to web API: {errc}")
-    except requests.exceptions.Timeout as errt:
-        print(f"Timeout error: {errt}")
-    except requests.exceptions.RequestException as err:
-        print(f"An unexpected error occurred: {err}")
+    # This function is now redundant as we're using MQTT
+    # You can keep it or remove it, but it's not called in the main loop.
+    pass
 
 def publish_to_mqtt(payload_data):
-    """
-    Publishes a JSON payload to the MQTT broker.
-    Converts Numpy types to standard Python types.
-    """
-    # Create a copy of the payload to modify
-    clean_payload = payload_data.copy()
+    # This function is now redundant as we're publishing directly in the main loop.
+    # You can keep it or remove it.
+    pass
 
-    # Convert Numpy types to standard Python floats for JSON serialization
-    for key, value in clean_payload.items():
-        if isinstance(value, np.float64):
-            clean_payload[key] = float(value)
-
-    json_payload = json.dumps(clean_payload)
-    try:
-        mqtt_client.publish(MQTT_TOPIC, json_payload)
-        print(f"Published data to MQTT topic '{MQTT_TOPIC}': {json_payload}")
-    except Exception as e:
-        print(f"Error publishing data to MQTT broker: {e}")
-gs
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
