@@ -47,7 +47,7 @@ EASYOCR_BLOCKLIST = ''
 PROCESS_INTERVAL_SECONDS = 20 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
-FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8s.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
+FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/YoloRetrain.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
 FLATBUG_DEVICE = "cpu" # Recommended for Raspberry Pi or systems without dedicated GPU
 FLATBUG_DTYPE = "float32" # Use float32 for CPU, float16 for GPU if supported
 
@@ -329,9 +329,14 @@ def publish_to_mqtt(payload_data):
 if __name__ == "__main__":
     try:
         while True:
-            image_number = int(time.time())  # Use timestamp as unique image number
+            # images_found = process_images_from_folder()
+            
+            # if not images_found:
+            #     print("No images to process. Capturing a new one.")
+            #     capture_image(INPUT_IMAGE_DIR)
+            # else:
             process_images_from_folder()
-            capture_image(INPUT_IMAGE_DIR, image_number)
+
             print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
             time.sleep(PROCESS_INTERVAL_SECONDS)
 
