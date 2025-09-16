@@ -7,6 +7,7 @@ import numpy as np
 import paho.mqtt.client as mqtt # Import MQTT library
 import json # To send data as JSON
 import requests
+from camera_capture import capture_image
 
 # --- Flat-Bug Model Imports ---
 from flat_bug.predictor import Predictor
@@ -43,7 +44,7 @@ EASYOCR_ALLOWLIST = '0123456789' # Only allow digits for tray number recognition
 EASYOCR_BLOCKLIST = ''
 
 # Script Timing
-PROCESS_INTERVAL_SECONDS = 10 # How often to check for new images and process them
+PROCESS_INTERVAL_SECONDS = 20 # How often to check for new images and process them
 
 # Flat-Bug Model Configuration
 FLATBUG_MODEL_PATH = "/home/pato/Documents/sdf/bestyolov8s.pt" # <--- IMPORTANT: SET PATH TO YOUR DOWNLOADED FLAT-BUG MODEL WEIGHTS (.pt file)
@@ -328,7 +329,9 @@ def publish_to_mqtt(payload_data):
 if __name__ == "__main__":
     try:
         while True:
+            image_number = int(time.time())  # Use timestamp as unique image number
             process_images_from_folder()
+            capture_image(INPUT_IMAGE_DIR, image_number)
             print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
             time.sleep(PROCESS_INTERVAL_SECONDS)
 
