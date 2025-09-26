@@ -14,4 +14,4 @@ def capture_image(DIR):
 
     subprocess.call(cmd, shell=True)   
     print('Image' + fileName)
-    sleep(5)
+    sleep(10)
