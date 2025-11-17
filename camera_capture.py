@@ -10,7 +10,7 @@ def capture_image(DIR):
         
     fileName= datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".jpg"
     filePath = os.path.join(DIR, fileName)
-    cmd = "raspistill -t 1000 -o " + filePath
+    cmd = "rpicam-still -t 1000 -o " + filePath
 
     subprocess.call(cmd, shell=True)   
     print('Image' + fileName)

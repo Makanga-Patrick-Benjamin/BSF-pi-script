@@ -329,16 +329,16 @@ def publish_to_mqtt(payload_data):
 if __name__ == "__main__":
     try:
         while True:
-            # images_found = process_images_from_folder()
+            images_found = process_images_from_folder()
             
-            # if not images_found:
-            #     print("No images to process. Capturing a new one.")
-            #     capture_image(INPUT_IMAGE_DIR)
-            # else:
-            process_images_from_folder()
+            if not images_found:
+                print("No images to process. Capturing a new one.")
+                capture_image(INPUT_IMAGE_DIR)
+            else:
+                process_images_from_folder()
 
-            print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
-            time.sleep(PROCESS_INTERVAL_SECONDS)
+                print(f"\nWaiting for {PROCESS_INTERVAL_SECONDS} seconds before checking again...")
+                time.sleep(PROCESS_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
         print("\nExiting program due to user interruption.")
