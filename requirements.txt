@@ -1,12 +1,11 @@
 easyocr==1.7.2
-numpy==2.3.3
-onnxruntime
+flat_bug==0.4.0
+# flat_bug.egg==info
+numpy==1.24.2
+onnxruntime==1.22.1
+opencv_python==4.11.0.86
+opencv_python_headless==4.11.0.86
 paho_mqtt==2.1.0
 picamera2==0.3.31
 Requests==2.32.5
 ultralytics==8.3.200
-opencv_python
-opencv_python_headless
-easyocr==1.7.2
-
-
